@@ -1,0 +1,45 @@
+# ============================================================================
+# ForgeClosedML — Cloudflare Tunnel Configuration
+# Install: cloudflared service install
+# Config:  /etc/cloudflare/config.yml
+# ============================================================================
+# IMPORTANT: Replace placeholder values before deployment
+# Run: cloudflared tunnel login
+#      cloudflared tunnel create forge-closedml
+# ============================================================================
+
+tunnel: <TUNNEL_ID>
+credentials-file: /etc/cloudflare/<TUNNEL_ID>.json
+
+# ── Ingress Rules ────────────────────────────────────────────────────────────
+# Maps external hostnames to internal services. Traffic is outbound-only —
+# no inbound firewall rules required. Aligns with NIST 800-207 Zero Trust.
+ingress:
+  # LiteLLM inference API (primary inference endpoint)
+  - hostname: inference.forgecyberdefense.com
+    service: http://localhost:4000
+    originRequest:
+      noTLSVerify: false
+      connectTimeout: 30s
+      httpHostHeader: inference.forgecyberdefense.com
+
+  # MLflow experiment tracking & model registry
+  - hostname: mlflow.forgecyberdefense.com
+    service: http://localhost:5000
+    originRequest:
+      connectTimeout: 10s
+
+  # Airflow pipeline orchestration
+  - hostname: airflow.forgecyberdefense.com
+    service: http://localhost:8080
+    originRequest:
+      connectTimeout: 10s
+
+  # Catch-all: reject unmatched requests
+  - service: http_status:404
+
+# ── Protocol ─────────────────────────────────────────────────────────────────
+protocol: quic
+
+# ── Metrics ──────────────────────────────────────────────────────────────────
+metrics: localhost:2000

@@ -1,0 +1,43 @@
+name = "forge-closedml"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+# ── Environment Variables ────────────────────────────────────────────────────
+# Set these via `wrangler secret put` or in the Cloudflare dashboard
+# LITELLM_ENDPOINT  = "http://inference-node-01.internal:4000"  (set via Tunnel)
+# MLFLOW_ENDPOINT   = "http://mlflow.internal:5000"             (set via Tunnel)
+# API_SECRET        = (generate: openssl rand -hex 32)
+
+[vars]
+ENVIRONMENT = "production"
+
+# ── D1 Database ──────────────────────────────────────────────────────────────
+[[d1_databases]]
+binding = "DB"
+database_name = "forge-closedml-db"
+database_id = ""  # Fill after: wrangler d1 create forge-closedml-db
+
+# ── R2 Bucket (model artifact storage) ───────────────────────────────────────
+[[r2_buckets]]
+binding = "MODEL_STORE"
+bucket_name = "forge-closedml-models"
+
+# ── KV Namespace (inference response cache) ──────────────────────────────────
+[[kv_namespaces]]
+binding = "INFERENCE_CACHE"
+id = ""  # Fill after: wrangler kv namespace create INFERENCE_CACHE
+
+# ── Development ──────────────────────────────────────────────────────────────
+[dev]
+port = 8787
+
+# ── Staging Environment ──────────────────────────────────────────────────────
+[env.staging]
+name = "forge-closedml-staging"
+[env.staging.vars]
+ENVIRONMENT = "staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "forge-closedml-db-staging"
+database_id = ""  # Fill after: wrangler d1 create forge-closedml-db-staging

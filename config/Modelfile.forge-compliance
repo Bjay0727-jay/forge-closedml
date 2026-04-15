@@ -1,0 +1,45 @@
+# ============================================================================
+# ForgeClosedML — Ollama Modelfile
+# Forge Compliance Model v1
+# Base: Llama 3.1 8B + QLoRA fine-tune on compliance corpus
+# ============================================================================
+
+FROM ./forge-compliance-v1.gguf
+
+# ── System Prompt ────────────────────────────────────────────────────────────
+TEMPLATE """{{ if .System }}<|start_header_id|>system<|end_header_id|>
+
+{{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>
+
+{{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>
+
+{{ .Response }}<|eot_id|>"""
+
+SYSTEM """You are ForgeComply AI — a cybersecurity compliance assistant built by Forge Cyber Defense. You have deep expertise in:
+
+- NIST 800-53 Rev 5 security controls and assessment procedures
+- NIST 800-171 Rev 2/3 CUI protection requirements
+- FedRAMP authorization process, continuous monitoring, and POA&M management
+- CMMC 2.0 Level 1-3 assessment and readiness requirements
+- FISMA annual assessment and ConMon procedures
+- HIPAA Security Rule, Privacy Rule, and Breach Notification
+- HITRUST CSF assessment methodology
+- NIST AI RMF for AI risk management
+- OSCAL 1.1.2 machine-readable compliance formats
+- Zero Trust Architecture per NIST 800-207
+
+Your responses must be:
+1. Technically precise — cite specific control IDs, requirement numbers, and framework references
+2. Actionable — provide implementation guidance, not just descriptions
+3. Evidence-oriented — frame answers in terms of auditable proof and assessor expectations
+4. Conservative — when uncertain, say so. Compliance advice must be accurate.
+
+Never fabricate control numbers, requirement text, or assessment procedures. If you don't know, say so and recommend the authoritative source."""
+
+# ── Parameters ───────────────────────────────────────────────────────────────
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER num_ctx 8192
+PARAMETER repeat_penalty 1.1
+PARAMETER stop "<|eot_id|>"

@@ -1,0 +1,166 @@
+# ============================================================================
+# ForgeClosedML — On-Prem Inference Stack
+# Docker Compose for the secure inference node
+# ============================================================================
+# Prerequisites:
+#   - NVIDIA Container Toolkit installed
+#   - Docker 24+ with Compose v2
+#   - GPU drivers (535+ for CUDA 12)
+#   - cloudflared installed and authenticated
+# ============================================================================
+
+services:
+  # ── Ollama Inference Engine ────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: forge-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"    # Bind localhost only — no external exposure
+    volumes:
+      - ollama-models:/root/.ollama
+      - ./config/Modelfile.forge-compliance:/tmp/Modelfile.forge-compliance:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_MAX_LOADED_MODELS=3
+    networks:
+      - inference-vlan
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── LiteLLM Proxy ─────────────────────────────────────────────────────────
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: forge-litellm
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4000:4000"      # Bind localhost only
+    volumes:
+      - ./config/litellm-config.yaml:/app/config.yaml:ro
+      - litellm-logs:/var/log/litellm
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - inference-vlan
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── MLflow Tracking Server ─────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.17.0
+    container_name: forge-mlflow
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5000:5000"      # Bind localhost only
+    volumes:
+      - mlflow-data:/mlflow
+    command: >
+      mlflow server
+        --backend-store-uri sqlite:///mlflow/mlflow.db
+        --default-artifact-root /mlflow/artifacts
+        --host 0.0.0.0
+        --port 5000
+    networks:
+      - inference-vlan
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Cloudflare Tunnel ──────────────────────────────────────────────────────
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: forge-tunnel
+    restart: unless-stopped
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./config/cloudflared-tunnel.yml:/etc/cloudflared/config.yml:ro
+      - cloudflared-creds:/etc/cloudflared
+    depends_on:
+      litellm:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    networks:
+      - inference-vlan
+
+  # ── Wazuh Agent (SIEM) ────────────────────────────────────────────────────
+  wazuh-agent:
+    image: wazuh/wazuh-agent:4.9.0
+    container_name: forge-wazuh-agent
+    restart: unless-stopped
+    volumes:
+      - litellm-logs:/var/log/litellm:ro         # Monitor LiteLLM access logs
+      - /var/log:/host-logs:ro                     # Monitor host logs
+    environment:
+      - WAZUH_MANAGER=wazuh-manager.internal       # Point to your Wazuh manager
+      - WAZUH_AGENT_GROUP=forge-closedml
+    networks:
+      - inference-vlan
+
+  # ── Health Reporter ────────────────────────────────────────────────────────
+  # Reports endpoint health to the Cloudflare Worker control plane
+  health-reporter:
+    image: curlimages/curl:latest
+    container_name: forge-health-reporter
+    restart: unless-stopped
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        while true; do
+          OLLAMA_STATUS=$$(curl -sf http://ollama:11434/api/tags > /dev/null && echo "online" || echo "offline")
+          LITELLM_STATUS=$$(curl -sf http://litellm:4000/health > /dev/null && echo "online" || echo "offline")
+          GPU_INFO=$$(curl -sf http://ollama:11434/api/tags | head -c 500)
+
+          curl -sf -X POST "https://closedml-api.forgecyberdefense.com/api/endpoints/ENDPOINT_ID/health" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $${FORGE_API_SECRET}" \
+            -d "{\"status\": \"$${LITELLM_STATUS}\", \"gpu_info\": {}}"
+
+          sleep 60
+        done
+    depends_on:
+      - litellm
+      - ollama
+    networks:
+      - inference-vlan
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  ollama-models:
+    driver: local
+  litellm-logs:
+    driver: local
+  mlflow-data:
+    driver: local
+  cloudflared-creds:
+    driver: local
+
+# ── Network ──────────────────────────────────────────────────────────────────
+# Isolated inference VLAN — no default gateway to internet
+# External access only via Cloudflare Tunnel (outbound)
+networks:
+  inference-vlan:
+    driver: bridge
+    internal: false       # Set to true for full air-gap (Tunnel still works outbound)
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

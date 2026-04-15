@@ -1,0 +1,75 @@
+# ============================================================================
+# ForgeClosedML — LiteLLM Proxy Configuration
+# Provides unified /v1/chat/completions for ForgeComply, ForgeScan, ForgeAI Govern
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+# ============================================================================
+
+model_list:
+  # ── Primary Compliance Model ──────────────────────────────────────────────
+  - model_name: forge-compliance
+    litellm_params:
+      model: ollama/forge-compliance-v1
+      api_base: http://localhost:11434
+      temperature: 0.1
+      max_tokens: 4096
+    model_info:
+      description: "Fine-tuned Llama 3.1 8B for NIST/FedRAMP/CMMC compliance tasks"
+      data_classification: "cui"
+
+  # ── General Purpose Model ─────────────────────────────────────────────────
+  - model_name: llama-3.1-8b
+    litellm_params:
+      model: ollama/llama3.1:8b-instruct-q4_K_M
+      api_base: http://localhost:11434
+      temperature: 0.7
+      max_tokens: 4096
+    model_info:
+      description: "Llama 3.1 8B base model for general tasks"
+      data_classification: "internal"
+
+  # ── Vulnerability Analysis ────────────────────────────────────────────────
+  - model_name: forge-vuln-analysis
+    litellm_params:
+      model: ollama/forge-vuln-v1
+      api_base: http://localhost:11434
+      temperature: 0.05
+      max_tokens: 8192
+    model_info:
+      description: "Fine-tuned for ForgeScan vulnerability analysis and CVE correlation"
+      data_classification: "cui"
+
+  # ── Code Analysis (ForgeRedOps) ───────────────────────────────────────────
+  - model_name: codellama-13b
+    litellm_params:
+      model: ollama/codellama:13b-instruct-q4_K_M
+      api_base: http://localhost:11434
+      temperature: 0.2
+      max_tokens: 8192
+    model_info:
+      description: "Code Llama 13B for security code analysis"
+      data_classification: "internal"
+
+# ── General Settings ──────────────────────────────────────────────────────────
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 120
+  num_retries: 2
+  retry_after: 5
+
+  # Rate limiting
+  max_budget: 0            # Unlimited (on-prem, no cost)
+  budget_duration: "30d"
+
+  # Logging — feeds into Wazuh SIEM
+  json_logs: true
+  log_file: "/var/log/litellm/access.log"
+
+  # Caching (optional: Redis or in-memory)
+  cache: false
+
+# ── Access Control ────────────────────────────────────────────────────────────
+general_settings:
+  master_key: "sk-forge-closedml-CHANGE-ME"   # Rotate regularly
+  allowed_ips: []                               # Enforce at network level via VLAN
+  database_url: ""                              # Optional: PostgreSQL for usage tracking
