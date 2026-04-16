@@ -3,7 +3,7 @@
 // Proxies /v1/chat/completions to on-prem LiteLLM via Cloudflare Tunnel
 // ============================================================================
 
-import { Env, DataClassification, InferenceRequest, ApiResponse } from '../types';
+import { Env, DataClassification } from '../types';
 import { AuthContext } from '../middleware/auth';
 import { logAuditEvent } from '../middleware/audit';
 import { enforceClassification, extractClassification, requiresTokenization } from '../middleware/classify';
@@ -29,10 +29,15 @@ export async function handleInference(
   try {
     body = await request.json() as Record<string, unknown>;
   } catch {
-    return jsonResponse<ApiResponse>({ success: false, error: 'Invalid JSON body' }, 400);
+    return jsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
   }
 
-  // Extract and validate data classification (required)
+  // Enforce explicit classification header
+  const headerClassification = request.headers.get('X-Data-Classification');
+  if (!headerClassification) {
+    return jsonResponse({ success: false, error: 'X-Data-Classification header is required.' }, 400);
+  }
+
   const classification = extractClassification(request, body);
   if (!classification) {
     ctx.waitUntil(logAuditEvent(env, auth, {
@@ -41,7 +46,7 @@ export async function handleInference(
       action: 'block',
       details: { reason: 'Missing data_classification', request_id: requestId },
     }, request));
-    return jsonResponse<ApiResponse>({
+    return jsonResponse({
       success: false,
       error: 'data_classification is required. Valid values: public, internal, cui, phi, classified',
     }, 400);
@@ -59,7 +64,7 @@ export async function handleInference(
       action: 'block',
       details: { classification, violation, request_id: requestId },
     }, request));
-    return jsonResponse<ApiResponse>({ success: false, error: violation }, 403);
+    return jsonResponse({ success: false, error: violation }, 403);
   }
 
   // PHI tokenization check
@@ -74,7 +79,7 @@ export async function handleInference(
           action: 'block',
           details: { reason: 'PHI data requires field-level tokenization. Set X-PHI-Tokenized: true after tokenizing.', request_id: requestId },
         }, request));
-        return jsonResponse<ApiResponse>({
+        return jsonResponse({
           success: false,
           error: 'PHI data requires field-level tokenization before inference. Tokenize PHI fields and set X-PHI-Tokenized: true header.',
         }, 403);
@@ -110,7 +115,7 @@ export async function handleInference(
   } catch (err) {
     const latency = Date.now() - startTime;
     ctx.waitUntil(logInference(env, requestId, modelName, auth, classification, body, null, 502, latency, (err as Error).message, request));
-    return jsonResponse<ApiResponse>({
+    return jsonResponse({
       success: false,
       error: 'Inference endpoint unreachable. Verify Cloudflare Tunnel and on-prem node status.',
     }, 502);

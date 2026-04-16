@@ -1,186 +1,93 @@
-// ============================================================================
-// ForgeClosedML — Cloudflare Worker API Gateway
-// Forge Cyber Defense | Closed ML Environment Control Plane
-//
-// Routes:
-//   POST /v1/chat/completions    → Inference proxy (LiteLLM via Tunnel)
-//   GET  /api/dashboard/stats    → Aggregated dashboard metrics
-//   GET  /api/dashboard/timeline → Inference timeline for charts
-//   GET  /api/dashboard/usage    → Model usage statistics
-//   GET  /api/models             → List models
-//   GET  /api/models/:id         → Get model
-//   POST /api/models             → Register model
-//   POST /api/models/:id/promote → Promote model lifecycle
-//   GET  /api/audit              → Query audit events
-//   GET  /api/endpoints          → List endpoints
-//   POST /api/endpoints/:id/health → Update endpoint health
-//   GET  /health                 → Worker health check
-// ============================================================================
-
-import { Env, ApiResponse } from './types';
-import { authenticate, AuthContext } from './middleware/auth';
+import { Env } from './types';
+import { authenticate } from './middleware/auth';
 import { handleInference } from './handlers/inference';
-import { listModels, getModel, registerModel, promoteModel } from './handlers/models';
+import { listModels, registerModel, promoteModel } from './handlers/models';
 import { getDashboardStats, getInferenceTimeline, getModelUsageStats } from './handlers/dashboard';
-import { queryAuditEvents } from './middleware/audit';
+import { queryAuditEvents, logAuditEvent } from './middleware/audit';
+
+const MAX_REQUEST_BYTES = 1024 * 1024; // 1MB
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
-    const method = request.method;
 
-    // CORS headers for dashboard
-    if (method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders() });
-    }
+    if (request.method === 'OPTIONS') return json({}, 204);
+    if (path === '/health') return json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
 
-    // Health check — no auth required
-    if (path === '/health') {
-      return json({
-        success: true,
-        data: {
-          service: 'forge-closedml',
-          status: 'operational',
-          version: '1.0.0-beta',
-          timestamp: new Date().toISOString(),
-        },
-      });
-    }
+    if (!enforceSizeLimit(request)) return json({ success: false, error: 'Request body too large (max 1MB).' }, 413);
 
-    // ── Authenticate ──────────────────────────────────────────────────
     const auth = await authenticate(request, env);
-    if (!auth) {
-      return json({ success: false, error: 'Unauthorized. Provide Cloudflare Access JWT, service token, or API key.' }, 401);
-    }
+    if (!auth) return json({ success: false, error: 'Unauthorized: actor or service identity required.' }, 401);
+
+    const limit = parseInt(env.RATE_LIMIT_PER_MINUTE || '120', 10);
+    const rl = await checkRateLimit(env, auth.identity, limit);
+    if (!rl.allowed) return json({ success: false, error: 'Rate limit exceeded.' }, 429, { 'Retry-After': '60' });
 
     try {
-      // ── Inference Proxy ───────────────────────────────────────────────
-      if (path === '/v1/chat/completions' && method === 'POST') {
-        return await handleInference(request, env, auth, ctx);
-      }
+      if (path === '/v1/chat/completions' && request.method === 'POST') return withCors(await handleInference(request, env, auth, ctx));
+      if (path === '/api/dashboard/stats' && request.method === 'GET') return withCors(await getDashboardStats(env));
+      if (path === '/api/dashboard/timeline' && request.method === 'GET') return withCors(await getInferenceTimeline(env, url));
+      if (path === '/api/dashboard/usage' && request.method === 'GET') return withCors(await getModelUsageStats(env));
 
-      // ── Dashboard ─────────────────────────────────────────────────────
-      if (path === '/api/dashboard/stats' && method === 'GET') {
-        return withCors(await getDashboardStats(env));
-      }
-      if (path === '/api/dashboard/timeline' && method === 'GET') {
-        return withCors(await getInferenceTimeline(env, url));
-      }
-      if (path === '/api/dashboard/usage' && method === 'GET') {
-        return withCors(await getModelUsageStats(env));
-      }
-
-      // ── Models ────────────────────────────────────────────────────────
-      if (path === '/api/models' && method === 'GET') {
-        return withCors(await listModels(env, url));
-      }
-      if (path === '/api/models' && method === 'POST') {
-        return withCors(await registerModel(request, env, auth, ctx));
-      }
-
-      // Model routes with ID
-      const modelMatch = path.match(/^\/api\/models\/([a-f0-9-]+)$/);
-      if (modelMatch && method === 'GET') {
-        return withCors(await getModel(env, modelMatch[1]));
-      }
-
+      if (path === '/api/models' && request.method === 'GET') return withCors(await listModels(env, url));
+      if (path === '/api/models' && request.method === 'POST') return withCors(await registerModel(request, env, auth, ctx));
       const promoteMatch = path.match(/^\/api\/models\/([a-f0-9-]+)\/promote$/);
-      if (promoteMatch && method === 'POST') {
-        return withCors(await promoteModel(request, env, auth, ctx, promoteMatch[1]));
-      }
+      if (promoteMatch && request.method === 'POST') return withCors(await promoteModel(request, env, auth, ctx, promoteMatch[1]));
 
-      // ── Audit ─────────────────────────────────────────────────────────
-      if (path === '/api/audit' && method === 'GET') {
-        const filters = {
-          event_type: url.searchParams.get('event_type') || undefined,
-          severity: url.searchParams.get('severity') || undefined,
-          actor: url.searchParams.get('actor') || undefined,
-          resource_type: url.searchParams.get('resource_type') || undefined,
-          conmon_period: url.searchParams.get('conmon_period') || undefined,
-          since: url.searchParams.get('since') || undefined,
-          limit: url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!) : undefined,
-          offset: url.searchParams.get('offset') ? parseInt(url.searchParams.get('offset')!) : undefined,
-        };
-        const result = await queryAuditEvents(env, filters);
-        return withCors(json({ success: true, data: result.events, meta: { total: result.total } }));
+      if (path === '/api/endpoints' && request.method === 'GET') {
+        const rows = await env.DB.prepare(`SELECT * FROM endpoints WHERE tenant_id='forge' ORDER BY name`).all();
+        return withCors(json({ success: true, data: rows.results }));
       }
-
-      // ── Endpoints ─────────────────────────────────────────────────────
-      if (path === '/api/endpoints' && method === 'GET') {
-        const result = await env.DB.prepare(
-          `SELECT * FROM endpoints WHERE tenant_id = 'forge' ORDER BY name`
-        ).all();
-        return withCors(json({ success: true, data: result.results }));
+      if (path === '/api/endpoints' && request.method === 'POST') {
+        const body = await parseJson(request);
+        if (!body || !isString(body.name) || !isString(body.service_type) || !isString(body.internal_url)) {
+          return withCors(json({ success: false, error: 'name, service_type, internal_url are required' }, 400));
+        }
+        const id = crypto.randomUUID();
+        await env.DB.prepare(`INSERT INTO endpoints (id,name,service_type,internal_url,external_host,tunnel_id,status,health_check_url,metadata_json) VALUES (?,?,?,?,?,?,?,?,?)`)
+          .bind(id, body.name, body.service_type, body.internal_url, body.external_host || null, body.tunnel_id || null, body.status || 'offline', body.health_check_url || '/health', JSON.stringify(body.metadata || {})).run();
+        ctx.waitUntil(logAuditEvent(env, auth, { event_type: 'endpoint.created', severity: 'info', action: 'create', resource_type: 'endpoint', resource_id: id }, request));
+        return withCors(json({ success: true, data: { id } }, 201));
       }
-
-      // Endpoint health update (called by on-prem health check cron)
       const healthMatch = path.match(/^\/api\/endpoints\/([a-f0-9-]+)\/health$/);
-      if (healthMatch && method === 'POST') {
-        const body = await request.json() as Record<string, unknown>;
-        await env.DB.prepare(`
-          UPDATE endpoints SET status = ?, last_health_check = datetime('now'), last_seen_at = datetime('now'), gpu_info = ?, updated_at = datetime('now')
-          WHERE id = ? AND tenant_id = 'forge'
-        `).bind(
-          body.status || 'online',
-          body.gpu_info ? JSON.stringify(body.gpu_info) : null,
-          healthMatch[1]
-        ).run();
+      if (healthMatch && request.method === 'POST') {
+        const body = await parseJson(request);
+        await env.DB.prepare(`UPDATE endpoints SET status=?,last_health_check=datetime('now'),last_seen_at=datetime('now'),gpu_info=?,updated_at=datetime('now') WHERE id=? AND tenant_id='forge'`)
+          .bind((body?.status as string) || 'online', body?.gpu_info ? JSON.stringify(body.gpu_info) : null, healthMatch[1]).run();
         return withCors(json({ success: true }));
       }
 
-      // ── Inference Logs ────────────────────────────────────────────────
-      if (path === '/api/inference-logs' && method === 'GET') {
-        const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
-        const offset = parseInt(url.searchParams.get('offset') || '0');
-        const classification = url.searchParams.get('classification');
-        const platform = url.searchParams.get('platform');
-
-        let query = `SELECT * FROM inference_logs WHERE tenant_id = 'forge'`;
-        const params: unknown[] = [];
-
-        if (classification) { query += ' AND data_classification = ?'; params.push(classification); }
-        if (platform) { query += ' AND source_platform = ?'; params.push(platform); }
-
-        query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-        params.push(limit, offset);
-
-        const result = await env.DB.prepare(query).bind(...params).all();
-        return withCors(json({ success: true, data: result.results }));
+      if (path === '/api/audit' && request.method === 'GET') {
+        const result = await queryAuditEvents(env, { conmon_period: url.searchParams.get('conmon_period') || undefined, severity: url.searchParams.get('severity') || undefined, limit: Number(url.searchParams.get('limit') || 100) });
+        return withCors(json({ success: true, data: result.events, meta: { total: result.total } }));
+      }
+      if (path === '/api/inference-logs' && request.method === 'GET') {
+        const rows = await env.DB.prepare(`SELECT * FROM inference_logs WHERE tenant_id='forge' ORDER BY created_at DESC LIMIT 200`).all();
+        return withCors(json({ success: true, data: rows.results }));
       }
 
-      // ── 404 ───────────────────────────────────────────────────────────
-      return json({ success: false, error: `Not found: ${method} ${path}` }, 404);
-
-    } catch (err) {
-      console.error('[WORKER_ERROR]', { path, method, error: (err as Error).message, stack: (err as Error).stack });
-      return json({ success: false, error: 'Internal server error' }, 500);
+      return withCors(json({ success: false, error: `Not found: ${request.method} ${path}` }, 404));
+    } catch (error) {
+      console.error(error);
+      return withCors(json({ success: false, error: 'Internal server error' }, 500));
     }
   },
 };
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...corsHeaders() },
-  });
+async function checkRateLimit(env: Env, identity: string, limit: number) {
+  const key = `rl:${identity}:${Math.floor(Date.now() / 60000)}`;
+  const curr = Number((await env.INFERENCE_CACHE.get(key)) || '0');
+  if (curr >= limit) return { allowed: false };
+  await env.INFERENCE_CACHE.put(key, String(curr + 1), { expirationTtl: 70 });
+  return { allowed: true };
 }
-
-function corsHeaders(): Record<string, string> {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, CF-Access-Client-Id, CF-Access-Client-Secret, X-Data-Classification, X-PHI-Tokenized',
-    'Access-Control-Max-Age': '86400',
-  };
+function enforceSizeLimit(request: Request) {
+  const len = Number(request.headers.get('content-length') || 0);
+  return !len || len <= MAX_REQUEST_BYTES;
 }
-
-function withCors(response: Response): Response {
-  const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(corsHeaders())) {
-    headers.set(key, value);
-  }
-  return new Response(response.body, { status: response.status, headers });
-}
+function isString(v: unknown): v is string { return typeof v === 'string' && v.trim().length > 0; }
+async function parseJson(req: Request): Promise<Record<string, any> | null> { try { return await req.json(); } catch { return null; } }
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...corsHeaders(), ...extraHeaders } }); }
+function corsHeaders() { return { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, CF-Access-Client-Id, CF-Access-Client-Secret, Cf-Access-Jwt-Assertion, X-Data-Classification, X-PHI-Tokenized' }; }
+function withCors(response: Response): Response { const headers = new Headers(response.headers); Object.entries(corsHeaders()).forEach(([k, v]) => headers.set(k, v)); return new Response(response.body, { status: response.status, headers }); }
