@@ -1,105 +1,57 @@
-// ============================================================================
-// ForgeClosedML — Inference Handler
-// Proxies /v1/chat/completions to on-prem LiteLLM via Cloudflare Tunnel
-// ============================================================================
-
 import { Env, DataClassification } from '../types';
 import { AuthContext } from '../middleware/auth';
 import { logAuditEvent } from '../middleware/audit';
 import { enforceClassification, extractClassification, requiresTokenization } from '../middleware/classify';
 
-/**
- * Handle inference requests — the hot path.
- * 1. Validate auth + classification
- * 2. Enforce data boundary policy
- * 3. Proxy to LiteLLM on-prem
- * 4. Log inference + audit trail
- */
 export async function handleInference(
   request: Request,
   env: Env,
   auth: AuthContext,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
+  requestId: string,
 ): Promise<Response> {
   const startTime = Date.now();
-  const requestId = crypto.randomUUID();
 
-  // Parse body
-  let body: Record<string, unknown>;
-  try {
-    body = await request.json() as Record<string, unknown>;
-  } catch {
-    return jsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
-  }
-
-  // Enforce explicit classification header
-  const headerClassification = request.headers.get('X-Data-Classification');
-  if (!headerClassification) {
-    return jsonResponse({ success: false, error: 'X-Data-Classification header is required.' }, 400);
+  const body = await parseJson(request);
+  if (!body) return jsonResponse({ success: false, error: 'Invalid JSON body' }, 400, requestId);
+  if (!Array.isArray(body.messages)) return jsonResponse({ success: false, error: 'messages[] is required' }, 400, requestId);
+  if (body.max_tokens && (!Number.isInteger(body.max_tokens) || Number(body.max_tokens) <= 0 || Number(body.max_tokens) > 16384)) {
+    return jsonResponse({ success: false, error: 'max_tokens must be an integer between 1 and 16384' }, 400, requestId);
   }
 
   const classification = extractClassification(request, body);
   if (!classification) {
     ctx.waitUntil(logAuditEvent(env, auth, {
-      event_type: 'inference.blocked',
-      severity: 'warning',
-      action: 'block',
-      details: { reason: 'Missing data_classification', request_id: requestId },
+      event_type: 'inference.blocked', severity: 'warning', action: 'block', resource_type: 'policy', resource_id: 'classification',
+      details: { reason: 'Missing/invalid or mismatched X-Data-Classification', request_id: requestId },
     }, request));
-    return jsonResponse({
-      success: false,
-      error: 'data_classification is required. Valid values: public, internal, cui, phi, classified',
-    }, 400);
+    return jsonResponse({ success: false, error: 'X-Data-Classification is required and must match body.data_classification when provided' }, 400, requestId);
   }
 
-  // Enforce classification policy — CUI/PHI/classified must stay on-prem
-  // The Worker itself is a cloud component, but it proxies to on-prem via Tunnel.
-  // For 'cloud' destination checks, the actual data transits the encrypted Tunnel.
-  // For CUI/PHI, we enforce that the request is routed to on-prem inference only.
   const violation = await enforceClassification(env, classification, 'on-prem');
   if (violation) {
     ctx.waitUntil(logAuditEvent(env, auth, {
-      event_type: 'classification.violation',
-      severity: 'critical',
-      action: 'block',
-      details: { classification, violation, request_id: requestId },
+      event_type: 'classification.violation', severity: 'critical', action: 'block', resource_type: 'policy', resource_id: classification,
+      details: { violation, request_id: requestId },
     }, request));
-    return jsonResponse({ success: false, error: violation }, 403);
+    return jsonResponse({ success: false, error: violation }, 403, requestId);
   }
 
-  // PHI tokenization check
-  if (classification === 'phi') {
-    const needsTokenization = await requiresTokenization(env, classification);
-    if (needsTokenization) {
-      const hasTokenizationHeader = request.headers.get('X-PHI-Tokenized') === 'true';
-      if (!hasTokenizationHeader) {
-        ctx.waitUntil(logAuditEvent(env, auth, {
-          event_type: 'inference.blocked',
-          severity: 'error',
-          action: 'block',
-          details: { reason: 'PHI data requires field-level tokenization. Set X-PHI-Tokenized: true after tokenizing.', request_id: requestId },
-        }, request));
-        return jsonResponse({
-          success: false,
-          error: 'PHI data requires field-level tokenization before inference. Tokenize PHI fields and set X-PHI-Tokenized: true header.',
-        }, 403);
-      }
+  if (classification === 'phi' && await requiresTokenization(env, classification)) {
+    if (request.headers.get('X-PHI-Tokenized') !== 'true') {
+      return jsonResponse({ success: false, error: 'PHI requires tokenization and X-PHI-Tokenized: true' }, 403, requestId);
     }
   }
 
-  // Resolve model — default from config if not specified
-  const modelName = (body.model as string) || await getDefaultModel(env);
-
-  // Build LiteLLM-compatible request
+  const modelName = (typeof body.model === 'string' ? body.model : null) || await getDefaultModel(env);
   const litellmBody = {
     model: modelName,
     messages: body.messages,
     max_tokens: body.max_tokens || 4096,
-    temperature: body.temperature ?? 0.1,
-    stream: body.stream || false,
+    temperature: typeof body.temperature === 'number' ? body.temperature : 0.1,
+    stream: body.stream === true,
   };
 
-  // Proxy to on-prem LiteLLM via Tunnel
   let litellmResponse: Response;
   try {
     litellmResponse = await fetch(`${env.LITELLM_ENDPOINT}/v1/chat/completions`, {
@@ -115,45 +67,31 @@ export async function handleInference(
   } catch (err) {
     const latency = Date.now() - startTime;
     ctx.waitUntil(logInference(env, requestId, modelName, auth, classification, body, null, 502, latency, (err as Error).message, request));
-    return jsonResponse({
-      success: false,
-      error: 'Inference endpoint unreachable. Verify Cloudflare Tunnel and on-prem node status.',
-    }, 502);
+    return jsonResponse({ success: false, error: 'Inference endpoint unreachable' }, 502, requestId);
   }
 
   const latency = Date.now() - startTime;
 
-  // Handle streaming responses
-  if (body.stream && litellmResponse.ok && litellmResponse.body) {
+  if (body.stream === true && litellmResponse.ok && litellmResponse.body) {
     ctx.waitUntil(logInference(env, requestId, modelName, auth, classification, body, null, litellmResponse.status, latency, null, request));
     return new Response(litellmResponse.body, {
+      status: litellmResponse.status,
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'X-Request-ID': requestId,
-        'X-Forge-Latency-Ms': String(latency),
       },
     });
   }
 
-  // Handle non-streaming response
-  const responseBody = await litellmResponse.json() as Record<string, unknown>;
-  const usage = responseBody.usage as Record<string, number> | undefined;
-
-  // Log inference (non-blocking)
-  ctx.waitUntil(logInference(
-    env, requestId, modelName, auth, classification, body, usage,
-    litellmResponse.status, latency, litellmResponse.ok ? null : JSON.stringify(responseBody), request
-  ));
+  const responseBody = await parseResponseJson(litellmResponse);
+  const responseObj = (responseBody && typeof responseBody === 'object') ? responseBody as Record<string, unknown> : { upstream_raw: String(responseBody) };
+  const usage = responseObj.usage as Record<string, number> | undefined;
+  ctx.waitUntil(logInference(env, requestId, modelName, auth, classification, body, usage, litellmResponse.status, latency, litellmResponse.ok ? null : JSON.stringify(responseObj), request));
 
   return new Response(JSON.stringify({
-    ...responseBody,
-    forge_metadata: {
-      request_id: requestId,
-      data_classification: classification,
-      latency_ms: latency,
-      model: modelName,
-    },
+    ...responseObj,
+    forge_metadata: { request_id: requestId, data_classification: classification, latency_ms: latency, model: modelName },
   }), {
     status: litellmResponse.status,
     headers: {
@@ -164,12 +102,8 @@ export async function handleInference(
   });
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
 async function getDefaultModel(env: Env): Promise<string> {
-  const config = await env.DB.prepare(
-    `SELECT value FROM system_config WHERE tenant_id = 'forge' AND key = 'default_model'`
-  ).first<{ value: string }>();
+  const config = await env.DB.prepare(`SELECT value FROM system_config WHERE tenant_id='forge' AND key='default_model'`).first<{ value: string }>();
   return config?.value || 'llama-3.1-8b';
 }
 
@@ -187,52 +121,41 @@ async function logInference(
   request: Request
 ): Promise<void> {
   const id = crypto.randomUUID();
-  const ip = request.headers.get('CF-Connecting-IP');
-  const country = request.headers.get('CF-IPCountry');
-  const sourcePlatform = (body.source_platform as string) || 'api';
-
   try {
-    await env.DB.prepare(`
-      INSERT INTO inference_logs (
-        id, request_id, model_id, model_name, model_version,
-        user_identity, user_email, source_platform, data_classification,
-        endpoint, prompt_tokens, completion_tokens, total_tokens,
-        latency_ms, status_code, error_message, ip_address, geo_country
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      id, requestId, modelName, modelName, 'latest',
-      auth.identity, auth.email, sourcePlatform, classification,
-      '/v1/chat/completions',
+    await env.DB.prepare(
+      `INSERT INTO inference_logs (id, tenant_id, request_id, model_id, model_name, user_identity, source_platform, data_classification, status_code, prompt_tokens, completion_tokens, total_tokens, latency_ms, error_message, created_at)
+       VALUES (?, 'forge', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+    ).bind(
+      id,
+      requestId,
+      modelName,
+      modelName,
+      auth.identity,
+      (body.source_platform as string) || 'api',
+      classification,
+      statusCode,
       usage?.prompt_tokens || null,
       usage?.completion_tokens || null,
       usage?.total_tokens || null,
-      latencyMs, statusCode, errorMessage, ip, country
+      latencyMs,
+      errorMessage,
     ).run();
   } catch (err) {
     console.error('[INFERENCE_LOG_FAILURE]', { request_id: requestId, error: (err as Error).message });
   }
 
-  // Also log as audit event
   await logAuditEvent(env, auth, {
     event_type: statusCode >= 400 ? 'inference.blocked' : 'inference.completed',
     severity: statusCode >= 400 ? 'warning' : 'info',
     action: statusCode >= 400 ? 'block' : 'read',
     resource_type: 'model',
     resource_id: modelName,
-    details: {
-      request_id: requestId,
-      classification,
-      source_platform: sourcePlatform,
-      tokens: usage?.total_tokens,
-      latency_ms: latencyMs,
-      status_code: statusCode,
-    },
+    details: { request_id: requestId, classification, tokens: usage?.total_tokens || 0, latency_ms: latencyMs, status_code: statusCode },
   }, request);
 }
 
-function jsonResponse<T>(body: T, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+async function parseJson(req: Request): Promise<Record<string, unknown> | null> { try { return await req.json() as Record<string, unknown>; } catch { return null; } }
+async function parseResponseJson(res: Response): Promise<unknown> { try { return await res.json(); } catch { return { error: 'upstream returned non-json response' }; } }
+function jsonResponse(body: unknown, status = 200, requestId?: string): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...(requestId ? { 'X-Request-ID': requestId } : {}) } });
 }

@@ -7,6 +7,10 @@ export interface Env {
   API_SECRET: string;
   ENVIRONMENT: string;
   RATE_LIMIT_PER_MINUTE?: string;
+  ACCESS_AUD?: string;
+  ACCESS_TEAM_DOMAIN?: string;
+  CF_ACCESS_CLIENT_ID?: string;
+  CF_ACCESS_CLIENT_SECRET?: string;
 }
 
 export type DataClassification = 'public' | 'internal' | 'cui' | 'phi' | 'classified';
@@ -17,8 +21,10 @@ export type AuditAction = 'create' | 'read' | 'update' | 'delete' | 'promote' | 
 export type EventType = string;
 
 export interface CfAccessIdentity {
-  email: string;
+  email?: string;
   sub: string;
+  aud?: string | string[];
+  iss?: string;
   name?: string;
   groups?: string[];
   iat: number;

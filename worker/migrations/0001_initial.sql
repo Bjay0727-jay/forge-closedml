@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS models (
   tenant_id TEXT NOT NULL DEFAULT 'forge',
   name TEXT NOT NULL,
   current_version_id TEXT,
-  lifecycle_state TEXT NOT NULL DEFAULT 'dev', -- dev|staged|approved|production|quarantined
+  lifecycle_state TEXT NOT NULL DEFAULT 'dev',
   owner TEXT,
   artifact_signature TEXT,
   provenance_uri TEXT,
@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS endpoints (
   metadata_json TEXT,
   gpu_info TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(tenant_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS inference_logs (
@@ -82,6 +83,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   event_type TEXT NOT NULL,
   severity TEXT NOT NULL,
   actor TEXT NOT NULL,
+  actor_email TEXT,
   action TEXT NOT NULL,
   resource_type TEXT,
   resource_id TEXT,
@@ -90,7 +92,46 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_models_state ON models(tenant_id, lifecycle_state);
-CREATE INDEX IF NOT EXISTS idx_inference_created ON inference_logs(tenant_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(tenant_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_audit_conmon ON audit_events(tenant_id, conmon_period);
+CREATE TABLE IF NOT EXISTS classification_policies (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'forge',
+  classification TEXT NOT NULL,
+  allowed_destinations TEXT NOT NULL,
+  tokenization_required INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(tenant_id, classification)
+);
+
+CREATE TABLE IF NOT EXISTS system_config (
+  tenant_id TEXT NOT NULL DEFAULT 'forge',
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (tenant_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_models_state ON models(tenant_id, lifecycle_state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_models_name ON models(tenant_id, name);
+CREATE INDEX IF NOT EXISTS idx_model_versions_model ON model_versions(model_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_promotion_approvals_model ON promotion_approvals(model_id, target_state, approved_at DESC);
+CREATE INDEX IF NOT EXISTS idx_endpoints_status ON endpoints(tenant_id, status, service_type);
+CREATE INDEX IF NOT EXISTS idx_inference_created ON inference_logs(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inference_model ON inference_logs(tenant_id, model_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inference_class ON inference_logs(tenant_id, data_classification, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_lookup ON audit_events(tenant_id, event_type, severity, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_conmon ON audit_events(tenant_id, conmon_period, created_at DESC);
+
+INSERT OR IGNORE INTO classification_policies (id, tenant_id, classification, allowed_destinations, tokenization_required)
+VALUES
+('cp-public','forge','public','["on-prem","cloud","r2"]',0),
+('cp-internal','forge','internal','["on-prem","cloud"]',0),
+('cp-cui','forge','cui','["on-prem"]',0),
+('cp-phi','forge','phi','["on-prem"]',1),
+('cp-classified','forge','classified','["on-prem"]',0);
+
+INSERT OR IGNORE INTO system_config (tenant_id, key, value, updated_by)
+VALUES
+('forge','default_model','llama-3.1-8b','system'),
+('forge','require_data_classification','true','system');

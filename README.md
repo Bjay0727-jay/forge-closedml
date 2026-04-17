@@ -1,6 +1,6 @@
 # ForgeClosedML
 
-Production-ready MVP for Forge Cyber Defense: Cloudflare-hosted control plane + on-prem inference behind outbound-only Cloudflare Tunnel.
+ForgeClosedML is a closed-boundary ML control plane: Cloudflare hosts API + dashboard, while inference remains on-prem behind outbound-only Cloudflare Tunnel.
 
 ## Repository Layout
 
@@ -13,9 +13,8 @@ forge-closedml/
   README.md
 ```
 
-## What is Implemented
+## MVP Endpoints
 
-### Worker API Gateway (TypeScript)
 - `POST /v1/chat/completions`
 - `GET /api/dashboard/stats`
 - `GET /api/dashboard/timeline`
@@ -29,23 +28,22 @@ forge-closedml/
 - `POST /api/endpoints/:id/health`
 - `GET /api/inference-logs`
 - `GET /health`
+- `GET /ready`
 
-Middleware:
-- `worker/src/middleware/auth.ts`
-- `worker/src/middleware/audit.ts`
-- `worker/src/middleware/classify.ts`
+## Security + Governance Controls
 
-Security controls:
-- actor/service identity required
-- explicit `X-Data-Classification` enforcement
-- structured audit logging
-- request size limit (1MB)
-- KV-backed per-identity rate limiting
-- explicit JSON validation on write endpoints
-- no hard-coded secrets
-- artifact signature / provenance placeholders
+- Actor/service identity required for all API routes except health/readiness.
+- `X-Data-Classification` required and must match payload classification if supplied.
+- Classification policy enforcement + critical audit event on violation.
+- Request size limit (1MB) and KV-backed per-identity rate limiting.
+- Structured audit events for privileged and blocked actions.
+- Model lifecycle states: `dev`, `staged`, `approved`, `production`, `quarantined`.
+- Two-person approval gate for promotion to production.
+- Rollback support for model promotion using prior promotion evidence.
+- Request ID propagation using `X-Request-ID`.
 
-### D1 Schema
+## D1 Schema
+
 Defined in `worker/migrations/0001_initial.sql`:
 - `models`
 - `model_versions`
@@ -53,41 +51,21 @@ Defined in `worker/migrations/0001_initial.sql`:
 - `inference_logs`
 - `audit_events`
 - `promotion_approvals`
+- `classification_policies`
+- `system_config`
 
-### Dashboard (React + TypeScript + Vite)
-Pages:
-- Dashboard
-- Models
-- Endpoints
-- Inference Logs
-- Audit Events
-- Policy Violations
-
-### On-Prem Compose Stack
-- Ollama
-- LiteLLM
-- MLflow
-- cloudflared
-- optional Redis profile
-- tunnel + LiteLLM config templates in `config/`
-
-## Governance
-- lifecycle states: `dev`, `staged`, `approved`, `production`, `quarantined`
-- two-person promotion to production (via `promotion_approvals`)
-- audit logging for privileged actions
-- ConMon evidence grouping via `audit_events.conmon_period`
-- classification violations logged as critical
+Includes ConMon period grouping (`audit_events.conmon_period`) and placeholder provenance fields (`artifact_signature`, `provenance_uri`).
 
 ## Local Development
 
 ```bash
-# worker
+# Worker
 cd worker
 npm install
 cp .dev.vars.example .dev.vars
 npm run dev
 
-# dashboard
+# Dashboard
 cd ../dashboard
 npm install
 npm run dev
@@ -95,21 +73,41 @@ npm run dev
 
 ## Deployment
 
-1. Configure `worker/wrangler.toml` bindings and IDs.
-2. Apply D1 migration:
-   - `wrangler d1 execute forge-closedml-db --file=./migrations/0001_initial.sql`
-3. Set Worker secrets:
-   - `wrangler secret put API_SECRET`
-   - `wrangler secret put LITELLM_ENDPOINT`
-   - `wrangler secret put MLFLOW_ENDPOINT`
-4. Deploy worker: `wrangler deploy`
-5. Build/deploy dashboard to Cloudflare Pages.
-6. Start on-prem stack: `docker compose up -d`
+1. Configure D1/KV/R2 IDs in `worker/wrangler.toml`.
+2. Run migration:
+   ```bash
+   cd worker
+   wrangler d1 execute forge-closedml-db --file=./migrations/0001_initial.sql
+   ```
+3. Configure secrets:
+   ```bash
+   wrangler secret put API_SECRET
+   wrangler secret put LITELLM_ENDPOINT
+   wrangler secret put MLFLOW_ENDPOINT
+   wrangler secret put CF_ACCESS_CLIENT_ID
+   wrangler secret put CF_ACCESS_CLIENT_SECRET
+   ```
+4. Set vars for Access audience/team domain (`ACCESS_AUD`, `ACCESS_TEAM_DOMAIN`) in wrangler config.
+5. Deploy worker + dashboard.
+6. Bring up on-prem stack:
+   ```bash
+   docker compose up -d
+   ```
 
-## TODO (Hardening)
-- Verify CF Access JWT signatures against JWKS.
-- Add WAF rules + mTLS for service identities.
-- Add OpenAPI contract + schema validation library.
-- Add row-level tenant enforcement.
-- Add signed evidence bundle export endpoint.
-- Add CI tests and SAST/DAST pipelines.
+## Honest Production Gaps (Still Outstanding)
+
+1. **JWT signature verification** is still decode-and-verify-claims only; full JWKS signature validation must be implemented.
+2. **No automated test suite** (unit/integration/e2e) yet.
+3. **No policy-as-code engine** (e.g. OPA) for advanced approval and routing controls.
+4. **No cryptographic evidence bundle export endpoint** yet (ConMon export is query-based today).
+5. **No full multi-tenant isolation** (tenant is fixed to `forge`).
+6. **No background dead-letter/retry strategy** for downstream inference failures.
+7. **No end-to-end secret rotation automation**.
+
+## Hardening TODOs
+
+- Add JOSE/JWKS verification for Cloudflare Access JWT.
+- Add endpoint-level RBAC.
+- Add audit evidence export API by ConMon period (signed artifact).
+- Add schema validation library and OpenAPI contracts.
+- Add CI checks: tests, lint, SAST, dependency scanning.

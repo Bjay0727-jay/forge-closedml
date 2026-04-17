@@ -11,6 +11,8 @@ compatibility_date = "2024-12-01"
 [vars]
 ENVIRONMENT = "production"
 RATE_LIMIT_PER_MINUTE = "120"
+ACCESS_AUD = ""
+ACCESS_TEAM_DOMAIN = ""
 
 # ── D1 Database ──────────────────────────────────────────────────────────────
 [[d1_databases]]
