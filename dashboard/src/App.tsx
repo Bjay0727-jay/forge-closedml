@@ -6,13 +6,24 @@ type Page = 'Dashboard' | 'Models' | 'Endpoints' | 'Inference Logs' | 'Audit Eve
 export default function App() {
   const [page, setPage] = useState<Page>('Dashboard');
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [loadingStats, setLoadingStats] = useState(true);
   const [models, setModels] = useState<Model[]>([]);
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [logs, setLogs] = useState<InferenceLog[]>([]);
   const [audits, setAudits] = useState<AuditEvent[]>([]);
 
   useEffect(() => {
-    fetchDashboardStats().then(r => r.data && setStats(r.data));
+    fetchDashboardStats().then(r => {
+      if (r.success && r.data) {
+        setStats(r.data);
+        setStatsError(null);
+      } else {
+        setStatsError(r.error || 'Failed to load dashboard stats');
+      }
+      setLoadingStats(false);
+    });
+
     fetchModels().then(r => r.data && setModels(r.data));
     fetchEndpoints().then(r => r.data && setEndpoints(r.data));
     fetchInferenceLogs().then(r => r.data && setLogs(r.data));
@@ -30,7 +41,11 @@ export default function App() {
         ))}
       </div>
 
-      {page === 'Dashboard' && <pre>{JSON.stringify(stats, null, 2)}</pre>}
+      {page === 'Dashboard' && (
+        loadingStats ? <p>Loading dashboard stats...</p> :
+        statsError ? <p>Dashboard error: {statsError}</p> :
+        <pre>{JSON.stringify(stats, null, 2)}</pre>
+      )}
       {page === 'Models' && <Table rows={models} />}
       {page === 'Endpoints' && <Table rows={endpoints} />}
       {page === 'Inference Logs' && <Table rows={logs} />}
