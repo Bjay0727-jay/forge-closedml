@@ -23,7 +23,7 @@ database_id = "783bb9d4-c9d1-4d6e-9a6f-a7c8c0bcb0cc"  # Fill after: wrangler d1 
 
 # ── R2 Bucket (model artifact storage) ───────────────────────────────────────
 [[r2_buckets]]
-binding = "MODEL_STORE"
+binding = "MODEL_BUCKET"
 bucket_name = "forge-closedml-models"
 
 # ── KV Namespace (inference response cache) ──────────────────────────────────
