@@ -14,34 +14,56 @@ RATE_LIMIT_PER_MINUTE = "120"
 ACCESS_AUD = ""
 ACCESS_TEAM_DOMAIN = ""
 ACCESS_JWKS_URL = ""
+CORS_ALLOWED_ORIGIN = "https://closedml.forgecyberdefense.com"
 
-# ── D1 Database ──────────────────────────────────────────────────────────────
+# ── D1 Database (production) ─────────────────────────────────────────────────
+# Schema applied 2026-04-22 via MCP d1_database_query (see migrations/0001_initial.sql).
 [[d1_databases]]
 binding = "DB"
 database_name = "forge-closedml-db"
-database_id = "783bb9d4-c9d1-4d6e-9a6f-a7c8c0bcb0cc"  # Fill after: wrangler d1 create forge-closedml-db
+database_id = "783bb9d4-c9d1-4d6e-9a6f-a7c8c0bcb0cc"
 
-# ── R2 Bucket (model artifact storage) ───────────────────────────────────────
+# ── R2 Bucket — production model artifact storage ────────────────────────────
 [[r2_buckets]]
 binding = "MODEL_BUCKET"
 bucket_name = "forge-closedml-models"
 
-# ── KV Namespace (inference response cache) ──────────────────────────────────
+# ── KV Namespace — production rate-limit + inference cache ───────────────────
 [[kv_namespaces]]
 binding = "INFERENCE_CACHE"
-id = "d58ce5653af64e15938801169b5bd95d"  # Fill after: wrangler kv namespace create INFERENCE_CACHE
+id = "d58ce5653af64e15938801169b5bd95d"
 
 # ── Development ──────────────────────────────────────────────────────────────
 [dev]
 port = 8787
 
 # ── Staging Environment ──────────────────────────────────────────────────────
+# Staging KV + R2 provisioned 2026-04-22 via MCP. Staging D1 is currently
+# blocked by the 10-database-per-account Cloudflare limit (see README
+# "Known pilot constraints"). Until the limit is raised, staging shares the
+# production D1 but stamps ENVIRONMENT=staging on audit rows for filtering.
+# TODO(pilot): create `forge-closedml-db-staging` and paste the id below once
+# the account limit is raised, then remove the shared-DB note from README.
 [env.staging]
 name = "forge-closedml-staging"
+
 [env.staging.vars]
 ENVIRONMENT = "staging"
+RATE_LIMIT_PER_MINUTE = "120"
+ACCESS_AUD = ""
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_JWKS_URL = ""
+CORS_ALLOWED_ORIGIN = "https://closedml-staging.forgecyberdefense.com"
 
 [[env.staging.d1_databases]]
 binding = "DB"
-database_name = "forge-closedml-db-staging"
-database_id = ""  # Fill after: wrangler d1 create forge-closedml-db-staging
+database_name = "forge-closedml-db"
+database_id = "783bb9d4-c9d1-4d6e-9a6f-a7c8c0bcb0cc"  # shared with prod until dedicated staging DB exists
+
+[[env.staging.r2_buckets]]
+binding = "MODEL_BUCKET"
+bucket_name = "forge-closedml-models-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "INFERENCE_CACHE"
+id = "a9716d672f8a428eaaf68901cd612955"
