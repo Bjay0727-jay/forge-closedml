@@ -1,5 +1,5 @@
-import { Env } from '../types';
-import { AuthContext } from '../middleware/auth';
+import type { Env } from '../types';
+import type { AuthContext } from '../middleware/auth';
 import { logAuditEvent } from '../middleware/audit';
 
 const STATES = ['dev', 'staged', 'approved', 'production', 'quarantined'] as const;

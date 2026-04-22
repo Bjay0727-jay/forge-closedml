@@ -1,4 +1,4 @@
-import { Env } from '../types';
+import type { Env } from '../types';
 
 export async function getDashboardStats(env: Env): Promise<Response> {
   const now = new Date();

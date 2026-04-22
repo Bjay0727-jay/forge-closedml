@@ -1,5 +1,5 @@
-import { Env, DataClassification } from '../types';
-import { AuthContext } from '../middleware/auth';
+import type { Env, DataClassification } from '../types';
+import type { AuthContext } from '../middleware/auth';
 import { logAuditEvent } from '../middleware/audit';
 import { enforceClassification, extractClassification, requiresTokenization } from '../middleware/classify';
 

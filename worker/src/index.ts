@@ -1,8 +1,9 @@
-import { Env } from './types';
-import { authenticate, AuthContext } from './middleware/auth';
+import type { Env } from './types';
+import { authenticate, type AuthContext } from './middleware/auth';
 import { handleInference } from './handlers/inference';
 import { listModels, registerModel, promoteModel } from './handlers/models';
 import { getDashboardStats, getInferenceTimeline, getModelUsageStats } from './handlers/dashboard';
+import { exportAuditEvidence } from './handlers/audit';
 import { logAuditEvent, logSystemAuditEvent, queryAuditEvents } from './middleware/audit';
 import { hasPermission, type Permission } from './middleware/rbac';
 
@@ -191,6 +192,23 @@ async function routeRequest(
     return json({ success: true, data: result.events, meta: { total: result.total, limit, offset } });
   }
 
+  if (path === '/api/audit/export' && method === 'GET') {
+    const denied = denyForbidden(auth, 'audit:read');
+    if (denied) return denied;
+    return exportAuditEvidence(request, env, auth, url, ctx, requestId);
+  }
+
+  if (path === '/api/policy-violations' && method === 'GET') {
+    const denied = denyForbidden(auth, 'audit:read');
+    if (denied) return denied;
+    const limit = Number(url.searchParams.get('limit') || 100);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) return json({ success: false, error: 'limit must be 1-200' }, 400);
+    const rows = await env.DB.prepare(
+      `SELECT * FROM audit_events WHERE tenant_id='forge' AND (event_type='classification.violation' OR severity='critical') ORDER BY created_at DESC LIMIT ?`
+    ).bind(limit).all();
+    return json({ success: true, data: rows.results });
+  }
+
   if (path === '/api/inference-logs' && method === 'GET') {
     const limit = Number(url.searchParams.get('limit') || 200);
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) return json({ success: false, error: 'limit must be 1-500' }, 400);
@@ -240,6 +258,7 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
 }
 function getAllowedOrigin(env: Env, origin?: string | null) {
   const configured = env.CORS_ALLOWED_ORIGIN || DEFAULT_ALLOWED_ORIGIN;
+  if (configured === '*') return origin || '*';
   return origin === configured ? origin : configured;
 }
 function corsHeaders(env: Env, origin?: string | null) {
