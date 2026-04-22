@@ -7,6 +7,7 @@ import { logAuditEvent, logSystemAuditEvent, queryAuditEvents } from './middlewa
 import { hasPermission, type Permission } from './middleware/rbac';
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
+const DEFAULT_ALLOWED_ORIGIN = 'https://closedml.forgecyberdefense.com';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -14,16 +15,19 @@ export default {
     const path = url.pathname;
     const method = request.method;
     const requestId = request.headers.get('X-Request-ID') || crypto.randomUUID();
+    const origin = request.headers.get('Origin');
 
-    if (method === 'OPTIONS') return withRequestId(json({}, 204), requestId);
+    if (method === 'OPTIONS') {
+      return withRequestId(new Response(null, { status: 204, headers: corsHeaders(env, origin) }), requestId);
+    }
 
     if (path === '/health') {
-      return withRequestId(json({ success: true, service: 'forge-closedml-worker', status: 'healthy', timestamp: new Date().toISOString() }), requestId);
+      return withRequestId(withCors(json({ success: true, service: 'forge-closedml-worker', status: 'healthy', timestamp: new Date().toISOString() }), env, origin), requestId);
     }
     if (path === '/ready') {
       const checks = await readinessChecks(env);
       const ok = checks.db && checks.cache;
-      return withRequestId(json({ success: ok, status: ok ? 'ready' : 'not-ready', checks }, ok ? 200 : 503), requestId);
+      return withRequestId(withCors(json({ success: ok, status: ok ? 'ready' : 'not-ready', checks }, ok ? 200 : 503), env, origin), requestId);
     }
 
     if (!enforceSizeLimit(request)) {
@@ -31,7 +35,7 @@ export default {
         event_type: 'request.rejected', severity: 'warning', action: 'block', resource_type: 'http', resource_id: path,
         details: { reason: 'request_too_large', request_id: requestId },
       }));
-      return withRequestId(json({ success: false, error: 'Request body too large (max 1MB).' }, 413), requestId);
+      return withRequestId(withCors(json({ success: false, error: 'Request body too large (max 1MB).' }, 413), env, origin), requestId);
     }
 
     const auth = await authenticate(request, env);
@@ -40,7 +44,7 @@ export default {
         event_type: 'auth.denied', severity: 'warning', action: 'block', resource_type: 'auth', resource_id: method + ' ' + path,
         details: { request_id: requestId },
       }));
-      return withRequestId(json({ success: false, error: 'Unauthorized: actor or service identity required.' }, 401), requestId);
+      return withRequestId(withCors(json({ success: false, error: 'Unauthorized: actor or service identity required.' }, 401), env, origin), requestId);
     }
 
     const limit = parseInt(env.RATE_LIMIT_PER_MINUTE || '120', 10);
@@ -50,22 +54,21 @@ export default {
         event_type: 'rate_limited', severity: 'warning', action: 'block', resource_type: 'auth', resource_id: auth.identity,
         details: { request_id: requestId, per_minute_limit: limit },
       }, request));
-      return withRequestId(json({ success: false, error: 'Rate limit exceeded.' }, 429, { 'Retry-After': '60' }), requestId);
+      return withRequestId(withCors(json({ success: false, error: 'Rate limit exceeded.' }, 429, { 'Retry-After': '60' }), env, origin), requestId);
     }
 
     try {
       const res = await routeRequest(request, env, ctx, auth, url, path, method, requestId);
-      return withRequestId(withCors(res), requestId);
+      return withRequestId(withCors(res, env, origin), requestId);
     } catch (error) {
       ctx.waitUntil(logAuditEvent(env, auth, {
         event_type: 'request.failed', severity: 'error', action: 'block', resource_type: 'http', resource_id: method + ' ' + path,
         details: { request_id: requestId, error: (error as Error).message },
       }, request));
-      return withRequestId(withCors(json({ success: false, error: 'Internal server error' }, 500)), requestId);
+      return withRequestId(withCors(json({ success: false, error: 'Internal server error' }, 500), env, origin), requestId);
     }
   },
 };
-
 
 function denyForbidden(auth: AuthContext, permission: Permission): Response | null {
   if (!hasPermission(auth, permission)) {
@@ -232,7 +235,29 @@ function enforceSizeLimit(request: Request) {
 }
 function isString(v: unknown): v is string { return typeof v === 'string' && v.trim().length > 0; }
 async function parseJson(req: Request): Promise<Record<string, any> | null> { try { return await req.json(); } catch { return null; } }
-function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...corsHeaders(), ...extraHeaders } }); }
-function corsHeaders() { return { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, CF-Access-Client-Id, CF-Access-Client-Secret, Cf-Access-Jwt-Assertion, X-Data-Classification, X-PHI-Tokenized, X-Request-ID' }; }
-function withCors(response: Response): Response { const headers = new Headers(response.headers); Object.entries(corsHeaders()).forEach(([k, v]) => headers.set(k, v)); return new Response(response.body, { status: response.status, headers }); }
-function withRequestId(response: Response, requestId: string): Response { const headers = new Headers(response.headers); headers.set('X-Request-ID', requestId); return new Response(response.body, { status: response.status, headers }); }
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...extraHeaders } });
+}
+function getAllowedOrigin(env: Env, origin?: string | null) {
+  const configured = env.CORS_ALLOWED_ORIGIN || DEFAULT_ALLOWED_ORIGIN;
+  return origin === configured ? origin : configured;
+}
+function corsHeaders(env: Env, origin?: string | null) {
+  return {
+    'Access-Control-Allow-Origin': getAllowedOrigin(env, origin),
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, CF-Access-Client-Id, CF-Access-Client-Secret, Cf-Access-Jwt-Assertion, X-Data-Classification, X-PHI-Tokenized, X-Request-ID',
+    'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
+  };
+}
+function withCors(response: Response, env: Env, origin?: string | null): Response {
+  const headers = new Headers(response.headers);
+  Object.entries(corsHeaders(env, origin)).forEach(([k, v]) => headers.set(k, v));
+  return new Response(response.body, { status: response.status, headers });
+}
+function withRequestId(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set('X-Request-ID', requestId);
+  return new Response(response.body, { status: response.status, headers });
+}
