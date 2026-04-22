@@ -2,7 +2,7 @@
   "name": "forge-closedml-worker",
   "version": "1.0.0-beta",
   "private": true,
-  "description": "ForgeClosedML — Cloudflare Worker API Gateway for Closed ML Environment",
+  "description": "ForgeClosedML \u2014 Cloudflare Worker API Gateway for Closed ML Environment",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
@@ -11,7 +11,9 @@
     "db:migrate": "wrangler d1 execute forge-closedml-db --file=./migrations/0001_initial.sql",
     "db:migrate:staging": "wrangler d1 execute forge-closedml-db-staging --file=./migrations/0001_initial.sql",
     "db:migrate:local": "wrangler d1 execute forge-closedml-db --file=./migrations/0001_initial.sql --local",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types test/**/*.test.ts",
+    "test:auth": "node --test --experimental-strip-types test/auth.test.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241205.0",
