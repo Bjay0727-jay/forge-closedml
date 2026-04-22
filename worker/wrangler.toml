@@ -19,17 +19,17 @@ ACCESS_JWKS_URL = ""
 [[d1_databases]]
 binding = "DB"
 database_name = "forge-closedml-db"
-database_id = ""  # Fill after: wrangler d1 create forge-closedml-db
+database_id = "783bb9d4-c9d1-4d6e-9a6f-a7c8c0bcb0cc"  # Fill after: wrangler d1 create forge-closedml-db
 
 # ── R2 Bucket (model artifact storage) ───────────────────────────────────────
 [[r2_buckets]]
-binding = "MODEL_STORE"
+binding = "MODEL_BUCKET"
 bucket_name = "forge-closedml-models"
 
 # ── KV Namespace (inference response cache) ──────────────────────────────────
 [[kv_namespaces]]
 binding = "INFERENCE_CACHE"
-id = ""  # Fill after: wrangler kv namespace create INFERENCE_CACHE
+id = "d58ce5653af64e15938801169b5bd95d"  # Fill after: wrangler kv namespace create INFERENCE_CACHE
 
 # ── Development ──────────────────────────────────────────────────────────────
 [dev]
