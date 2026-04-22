@@ -1,11 +1,28 @@
+# Copy to worker/.dev.vars and fill in for `wrangler dev`.
+# Wrangler loads these as secrets during local dev; do not commit real values.
+
+# Static bearer token used by internal tools (falls back when no CF Access JWT
+# is available). Generate with: openssl rand -hex 32
 API_SECRET=replace-with-local-api-secret
+
+# On-prem service endpoints reached through the Cloudflare Tunnel. In local
+# dev these point at docker-compose services on localhost.
 LITELLM_ENDPOINT=http://127.0.0.1:4000
 MLFLOW_ENDPOINT=http://127.0.0.1:5000
+
 ENVIRONMENT=development
 RATE_LIMIT_PER_MINUTE=120
+
+# Cloudflare Access (required in production — leave blank in local dev to
+# fall back to the bearer token path above).
 ACCESS_AUD=
 ACCESS_TEAM_DOMAIN=
+ACCESS_JWKS_URL=
+
+# Cloudflare Access service-token pair, used by on-prem workers calling back
+# into the worker (e.g. pushing health updates).
 CF_ACCESS_CLIENT_ID=
 CF_ACCESS_CLIENT_SECRET=
 
-ACCESS_JWKS_URL=
+# Optional: override CORS origin for dev (e.g. http://localhost:5173).
+CORS_ALLOWED_ORIGIN=

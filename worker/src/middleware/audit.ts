@@ -1,5 +1,5 @@
-import { Env, EventType, Severity, AuditAction } from '../types';
-import { AuthContext } from './auth';
+import type { Env, EventType, Severity, AuditAction } from '../types';
+import type { AuthContext } from './auth';
 
 export interface AuditEntry {
   event_type: EventType;

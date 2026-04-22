@@ -1,6 +1,6 @@
 export interface Env {
   DB: D1Database;
-  MODEL_STORE: R2Bucket;
+  MODEL_BUCKET: R2Bucket;
   INFERENCE_CACHE: KVNamespace;
   LITELLM_ENDPOINT: string;
   MLFLOW_ENDPOINT: string;
@@ -12,6 +12,7 @@ export interface Env {
   ACCESS_JWKS_URL?: string;
   CF_ACCESS_CLIENT_ID?: string;
   CF_ACCESS_CLIENT_SECRET?: string;
+  CORS_ALLOWED_ORIGIN?: string;
 }
 
 export type DataClassification = 'public' | 'internal' | 'cui' | 'phi' | 'classified';

@@ -1,4 +1,4 @@
-import { Env, DataClassification, AllowedDestination } from '../types';
+import type { Env, DataClassification, AllowedDestination } from '../types';
 
 interface ClassificationPolicy {
   classification: string;
