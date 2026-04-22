@@ -136,6 +136,65 @@ Defined in `worker/migrations/0001_initial.sql`:
 
 ---
 
+## Pilot infrastructure state (2026-04-22)
+
+Provisioned in Cloudflare account `a819beba814a038e048a4b39dad86c63`
+(Stanley.riley@forgecyberdefense.com):
+
+| Resource | Env | Name | ID / location |
+| --- | --- | --- | --- |
+| D1  | prod    | `forge-closedml-db`                      | `783bb9d4-c9d1-4d6e-9a6f-a7c8c0bcb0cc` — schema applied |
+| KV  | prod    | `INFERENCE_CACHE`                        | `d58ce5653af64e15938801169b5bd95d` |
+| R2  | prod    | `forge-closedml-models`                  | ENAM |
+| KV  | staging | `forge-closedml-inference-cache-staging` | `a9716d672f8a428eaaf68901cd612955` |
+| R2  | staging | `forge-closedml-models-staging`          | ENAM |
+
+### Known pilot constraints
+
+1. **Staging D1 not yet provisioned** — the account is at the 10-database cap
+   (Cloudflare default), so staging temporarily points at the production D1
+   (`ENVIRONMENT=staging` is stamped on audit rows for filtering). Raise the
+   account D1 limit or prune unused DBs, then create
+   `forge-closedml-db-staging` and paste the id into
+   `worker/wrangler.toml` under `[[env.staging.d1_databases]]`.
+2. **Secrets are not yet set.** `API_SECRET`, `LITELLM_ENDPOINT`,
+   `MLFLOW_ENDPOINT`, and the `CF_ACCESS_CLIENT_ID/SECRET` pair must be
+   loaded via `wrangler secret put` before first deploy — see below.
+3. **Cloudflare Access application not yet bound.** Worker is deployable
+   without Access (falls back to bearer `API_SECRET`), but for pilot the
+   Access application needs to be created and the `ACCESS_AUD` /
+   `ACCESS_TEAM_DOMAIN` / `ACCESS_JWKS_URL` vars in `wrangler.toml` filled in.
+
+### Ready-to-run deploy commands
+
+```bash
+cd worker
+
+# 1. Put secrets (production)
+wrangler secret put API_SECRET               # openssl rand -hex 32
+wrangler secret put LITELLM_ENDPOINT         # e.g. https://inference.forgecyberdefense.com
+wrangler secret put MLFLOW_ENDPOINT          # e.g. https://mlflow.forgecyberdefense.com
+wrangler secret put CF_ACCESS_CLIENT_ID
+wrangler secret put CF_ACCESS_CLIENT_SECRET
+
+# 2. Same secrets for staging (use --env staging)
+wrangler secret put API_SECRET --env staging
+wrangler secret put LITELLM_ENDPOINT --env staging
+wrangler secret put MLFLOW_ENDPOINT --env staging
+wrangler secret put CF_ACCESS_CLIENT_ID --env staging
+wrangler secret put CF_ACCESS_CLIENT_SECRET --env staging
+
+# 3. Deploy
+npm run deploy:staging                       # sanity-check staging first
+npm run deploy                               # production
+
+# 4. Smoke-test (see smoke-test checklist below)
+curl https://<worker-host>/health
+curl https://<worker-host>/ready
+```
+
+---
+
 ## Local development
 
 ```bash
