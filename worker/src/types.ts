@@ -9,6 +9,7 @@ export interface Env {
   RATE_LIMIT_PER_MINUTE?: string;
   ACCESS_AUD?: string;
   ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_JWKS_URL?: string;
   CF_ACCESS_CLIENT_ID?: string;
   CF_ACCESS_CLIENT_SECRET?: string;
 }

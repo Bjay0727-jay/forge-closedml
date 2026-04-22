@@ -96,17 +96,16 @@ npm run dev
 
 ## Honest Production Gaps (Still Outstanding)
 
-1. **JWT signature verification** is still decode-and-verify-claims only; full JWKS signature validation must be implemented.
-2. **No automated test suite** (unit/integration/e2e) yet.
-3. **No policy-as-code engine** (e.g. OPA) for advanced approval and routing controls.
-4. **No cryptographic evidence bundle export endpoint** yet (ConMon export is query-based today).
-5. **No full multi-tenant isolation** (tenant is fixed to `forge`).
-6. **No background dead-letter/retry strategy** for downstream inference failures.
-7. **No end-to-end secret rotation automation**.
+1. **No comprehensive integration/e2e suite yet** (a starter auth test suite exists, but route-level coverage is still incomplete).
+2. **No policy-as-code engine** (e.g. OPA) for advanced approval and routing controls.
+3. **No cryptographic evidence bundle export endpoint** yet (ConMon export is query-based today).
+4. **No full multi-tenant isolation** (tenant is fixed to `forge`).
+5. **No background dead-letter/retry strategy** for downstream inference failures.
+6. **No end-to-end secret rotation automation**.
 
 ## Hardening TODOs
 
-- Add JOSE/JWKS verification for Cloudflare Access JWT.
+- Expand JOSE/JWKS test coverage for key rotation/failure modes.
 - Add endpoint-level RBAC.
 - Add audit evidence export API by ConMon period (signed artifact).
 - Add schema validation library and OpenAPI contracts.

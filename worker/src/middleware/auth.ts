@@ -7,6 +7,15 @@ export interface AuthContext {
   groups: string[];
 }
 
+interface JwtParts {
+  header: Record<string, unknown>;
+  payload: CfAccessIdentity;
+  signedContent: string;
+  signature: Uint8Array;
+}
+
+let cachedJwks: { url: string; expiresAt: number; keys: JsonWebKey[] } | null = null;
+
 export async function authenticate(request: Request, env: Env): Promise<AuthContext | null> {
   const cfAuth = request.headers.get('Cf-Access-Jwt-Assertion');
   if (cfAuth) {
@@ -54,27 +63,123 @@ function isValidServiceToken(clientId: string, clientSecret: string, env: Env): 
 }
 
 async function validateCfAccessJwt(token: string, env: Env): Promise<CfAccessIdentity | null> {
+  const jwt = parseJwt(token);
+  if (!jwt) return null;
+
+  if (!validateJwtClaims(jwt.payload, env)) return null;
+
+  const jwksUrl = getJwksUrl(env);
+  if (!jwksUrl) return null;
+
+  const verified = await verifyJwtSignature(jwt, jwksUrl);
+  return verified ? jwt.payload : null;
+}
+
+export function validateJwtClaims(payload: CfAccessIdentity, env: Env): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  if (!payload.sub || !payload.exp || !payload.iat) return false;
+  if (payload.exp < now || payload.iat > now + 60) return false;
+
+  if (env.ACCESS_AUD) {
+    const audList = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (!audList.includes(env.ACCESS_AUD)) return false;
+  }
+
+  if (env.ACCESS_TEAM_DOMAIN && payload.iss && !payload.iss.includes(env.ACCESS_TEAM_DOMAIN)) {
+    return false;
+  }
+
+  return true;
+}
+
+function parseJwt(token: string): JwtParts | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))) as CfAccessIdentity;
-
-    const now = Math.floor(Date.now() / 1000);
-    if (!payload.sub || payload.exp < now || payload.iat > now + 60) return null;
-
-    if (env.ACCESS_AUD) {
-      const audList = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-      if (!audList.includes(env.ACCESS_AUD)) return null;
-    }
-
-    if (env.ACCESS_TEAM_DOMAIN && payload.iss && !payload.iss.includes(env.ACCESS_TEAM_DOMAIN)) {
-      return null;
-    }
-
-    return payload;
+    const header = JSON.parse(base64UrlDecodeToString(parts[0])) as Record<string, unknown>;
+    const payload = JSON.parse(base64UrlDecodeToString(parts[1])) as CfAccessIdentity;
+    const signature = base64UrlDecode(parts[2]);
+    return {
+      header,
+      payload,
+      signedContent: `${parts[0]}.${parts[1]}`,
+      signature,
+    };
   } catch {
     return null;
   }
+}
+
+function getJwksUrl(env: Env): string | null {
+  if (env.ACCESS_JWKS_URL) return env.ACCESS_JWKS_URL;
+  if (env.ACCESS_TEAM_DOMAIN) return `https://${env.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`;
+  return null;
+}
+
+async function verifyJwtSignature(jwt: JwtParts, jwksUrl: string): Promise<boolean> {
+  if (jwt.header.alg !== 'RS256') return false;
+
+  const keys = await fetchJwks(jwksUrl);
+  const kid = typeof jwt.header.kid === 'string' ? jwt.header.kid : null;
+  const candidateKeys = kid ? keys.filter((k) => (k as unknown as { kid?: string }).kid === kid) : keys;
+
+  const encoder = new TextEncoder();
+  for (const jwk of candidateKeys) {
+    try {
+      const key = await crypto.subtle.importKey(
+        'jwk',
+        jwk,
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+        false,
+        ['verify']
+      );
+
+      const ok = await crypto.subtle.verify(
+        'RSASSA-PKCS1-v1_5',
+        key,
+        jwt.signature,
+        encoder.encode(jwt.signedContent)
+      );
+      if (ok) return true;
+    } catch {
+      // try next key
+    }
+  }
+
+  return false;
+}
+
+async function fetchJwks(url: string): Promise<JsonWebKey[]> {
+  const now = Date.now();
+  if (cachedJwks && cachedJwks.url === url && cachedJwks.expiresAt > now) {
+    return cachedJwks.keys;
+  }
+
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Unable to fetch JWKS: ${res.status}`);
+  const data = await res.json() as { keys?: JsonWebKey[] };
+  const keys = Array.isArray(data.keys) ? data.keys : [];
+
+  cachedJwks = {
+    url,
+    keys,
+    expiresAt: now + 5 * 60 * 1000,
+  };
+
+  return keys;
+}
+
+function base64UrlDecodeToString(input: string): string {
+  return new TextDecoder().decode(base64UrlDecode(input));
+}
+
+function base64UrlDecode(input: string): Uint8Array {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  const bin = atob(padded);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

@@ -13,6 +13,7 @@ ENVIRONMENT = "production"
 RATE_LIMIT_PER_MINUTE = "120"
 ACCESS_AUD = ""
 ACCESS_TEAM_DOMAIN = ""
+ACCESS_JWKS_URL = ""
 
 # ── D1 Database ──────────────────────────────────────────────────────────────
 [[d1_databases]]
