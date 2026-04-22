@@ -1,28 +1,50 @@
-// ============================================================================
-// ForgeClosedML Dashboard — API Client
-// ============================================================================
-
 const API_BASE = import.meta.env.VITE_API_BASE || 'https://closedml-api.forgecyberdefense.com';
 
 interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
-  meta?: { total?: number; page?: number; per_page?: number };
+  meta?: { total?: number; page?: number; per_page?: number; limit?: number; offset?: number };
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  });
-  return res.json() as Promise<ApiResponse<T>>;
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+
+    const payload = await safeJson(res);
+    if (!res.ok) {
+      return {
+        success: false,
+        error: payload?.error || `Request failed (${res.status})`,
+        data: payload?.data,
+        meta: payload?.meta,
+      };
+    }
+
+    return {
+      success: Boolean(payload?.success ?? true),
+      data: payload?.data,
+      meta: payload?.meta,
+      error: payload?.error,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: (err as Error).message || 'Network error',
+    };
+  }
 }
 
-// ── Dashboard ───────────────────────────────────────────────────────────────
+async function safeJson(res: Response): Promise<any> {
+  try { return await res.json(); } catch { return { success: false, error: 'Invalid JSON response' }; }
+}
+
 export interface DashboardStats {
   models_total: number;
   models_production: number;
@@ -36,45 +58,27 @@ export interface DashboardStats {
   classification_violations_30d: number;
 }
 
-export const fetchDashboardStats = () =>
-  request<DashboardStats>('/api/dashboard/stats');
+export const fetchDashboardStats = () => request<DashboardStats>('/api/dashboard/stats');
+export const fetchInferenceTimeline = (days = 7) => request<TimelinePoint[]>(`/api/dashboard/timeline?days=${days}`);
+export const fetchModelUsage = () => request<ModelUsage[]>('/api/dashboard/usage');
 
-export const fetchInferenceTimeline = (days = 7) =>
-  request<TimelinePoint[]>(`/api/dashboard/timeline?days=${days}`);
-
-export const fetchModelUsage = () =>
-  request<ModelUsage[]>('/api/dashboard/usage');
-
-// ── Models ──────────────────────────────────────────────────────────────────
 export interface Model {
   id: string;
   name: string;
-  version: string;
-  base_model: string;
-  quantization: string | null;
-  format: string;
-  status: string;
-  sha256_hash: string | null;
-  size_bytes: number | null;
-  tags: string[];
+  lifecycle_state: string;
   created_by: string;
   created_at: string;
   updated_at: string;
 }
 
-export const fetchModels = (status?: string) =>
-  request<Model[]>(`/api/models${status ? `?status=${status}` : ''}`);
-
-export const registerModel = (data: Partial<Model>) =>
-  request<{ id: string }>('/api/models', { method: 'POST', body: JSON.stringify(data) });
-
-export const promoteModel = (id: string, targetStatus: string) =>
-  request<{ id: string; status: string }>(`/api/models/${id}/promote`, {
+export const fetchModels = (state?: string) => request<Model[]>(`/api/models${state ? `?state=${state}` : ''}`);
+export const registerModel = (data: Record<string, unknown>) => request<{ id: string }>('/api/models', { method: 'POST', body: JSON.stringify(data) });
+export const promoteModel = (id: string, targetState: string, rollbackToPrevious = false) =>
+  request<{ id: string; lifecycle_state: string }>(`/api/models/${id}/promote`, {
     method: 'POST',
-    body: JSON.stringify({ target_status: targetStatus }),
+    body: JSON.stringify(rollbackToPrevious ? { rollback_to_previous: true } : { target_state: targetState }),
   });
 
-// ── Audit ───────────────────────────────────────────────────────────────────
 export interface AuditEvent {
   id: string;
   event_type: string;
@@ -85,17 +89,15 @@ export interface AuditEvent {
   resource_id: string | null;
   action: string;
   details: Record<string, unknown> | null;
-  ip_address: string | null;
   conmon_period: string | null;
   created_at: string;
 }
 
 export const fetchAuditEvents = (params?: Record<string, string>) => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const query = params ? `?${new URLSearchParams(params).toString()}` : '';
   return request<AuditEvent[]>(`/api/audit${query}`);
 };
 
-// ── Endpoints ───────────────────────────────────────────────────────────────
 export interface Endpoint {
   id: string;
   name: string;
@@ -107,10 +109,8 @@ export interface Endpoint {
   gpu_info: Record<string, unknown> | null;
 }
 
-export const fetchEndpoints = () =>
-  request<Endpoint[]>('/api/endpoints');
+export const fetchEndpoints = () => request<Endpoint[]>('/api/endpoints');
 
-// ── Inference Logs ──────────────────────────────────────────────────────────
 export interface InferenceLog {
   id: string;
   request_id: string;
@@ -125,11 +125,10 @@ export interface InferenceLog {
 }
 
 export const fetchInferenceLogs = (params?: Record<string, string>) => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const query = params ? `?${new URLSearchParams(params).toString()}` : '';
   return request<InferenceLog[]>(`/api/inference-logs${query}`);
 };
 
-// ── Shared Types ────────────────────────────────────────────────────────────
 export interface TimelinePoint {
   date: string;
   requests: number;

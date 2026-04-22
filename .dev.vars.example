@@ -1,0 +1,12 @@
+# Copy into worker/.dev.vars for local wrangler dev
+API_SECRET=replace-with-local-api-secret
+LITELLM_ENDPOINT=http://127.0.0.1:4000
+MLFLOW_ENDPOINT=http://127.0.0.1:5000
+ENVIRONMENT=development
+RATE_LIMIT_PER_MINUTE=120
+ACCESS_AUD=
+ACCESS_TEAM_DOMAIN=
+CF_ACCESS_CLIENT_ID=
+CF_ACCESS_CLIENT_SECRET=
+
+ACCESS_JWKS_URL=
