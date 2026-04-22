@@ -37,6 +37,7 @@ forge-closedml/
 - Classification policy enforcement + critical audit event on violation.
 - Request size limit (1MB) and KV-backed per-identity rate limiting.
 - Structured audit events for privileged and blocked actions.
+- Role-based permissions for models/endpoints/audit/inference operations (`viewer`, `operator`, `approver`, `admin`, `service`).
 - Model lifecycle states: `dev`, `staged`, `approved`, `production`, `quarantined`.
 - Two-person approval gate for promotion to production.
 - Rollback support for model promotion using prior promotion evidence.
@@ -69,6 +70,9 @@ npm run dev
 cd ../dashboard
 npm install
 npm run dev
+
+# Worker tests
+npm run test
 ```
 
 ## Deployment

@@ -1,4 +1,4 @@
-import { Env, CfAccessIdentity } from '../types';
+import type { Env, CfAccessIdentity } from '../types';
 
 export interface AuthContext {
   identity: string;

@@ -4,6 +4,7 @@ import { handleInference } from './handlers/inference';
 import { listModels, registerModel, promoteModel } from './handlers/models';
 import { getDashboardStats, getInferenceTimeline, getModelUsageStats } from './handlers/dashboard';
 import { logAuditEvent, logSystemAuditEvent, queryAuditEvents } from './middleware/audit';
+import { hasPermission, type Permission } from './middleware/rbac';
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 
@@ -65,6 +66,14 @@ export default {
   },
 };
 
+
+function denyForbidden(auth: AuthContext, permission: Permission): Response | null {
+  if (!hasPermission(auth, permission)) {
+    return json({ success: false, error: `Forbidden: missing permission ${permission}` }, 403);
+  }
+  return null;
+}
+
 async function routeRequest(
   request: Request,
   env: Env,
@@ -75,7 +84,11 @@ async function routeRequest(
   method: string,
   requestId: string,
 ): Promise<Response> {
-  if (path === '/v1/chat/completions' && method === 'POST') return handleInference(request, env, auth, ctx, requestId);
+  if (path === '/v1/chat/completions' && method === 'POST') {
+    const denied = denyForbidden(auth, 'inference:invoke');
+    if (denied) return denied;
+    return handleInference(request, env, auth, ctx, requestId);
+  }
 
   if (path === '/api/dashboard/stats' && method === 'GET') return getDashboardStats(env);
   if (path === '/api/dashboard/timeline' && method === 'GET') {
@@ -85,23 +98,35 @@ async function routeRequest(
   }
   if (path === '/api/dashboard/usage' && method === 'GET') return getModelUsageStats(env);
 
-  if (path === '/api/models' && method === 'GET') return listModels(env, url);
+  if (path === '/api/models' && method === 'GET') {
+    const denied = denyForbidden(auth, 'models:read');
+    if (denied) return denied;
+    return listModels(env, url);
+  }
   if (path === '/api/models' && method === 'POST') {
+    const denied = denyForbidden(auth, 'models:write');
+    if (denied) return denied;
     await auditPrivilegedStart(env, auth, request, ctx, 'model.create.requested', 'model', 'new', requestId);
     return registerModel(request, env, auth, ctx);
   }
 
   const promoteMatch = path.match(/^\/api\/models\/([a-f0-9-]+)\/promote$/);
   if (promoteMatch && method === 'POST') {
+    const denied = denyForbidden(auth, 'models:promote');
+    if (denied) return denied;
     await auditPrivilegedStart(env, auth, request, ctx, 'model.promote.requested', 'model', promoteMatch[1], requestId);
     return promoteModel(request, env, auth, ctx, promoteMatch[1], requestId);
   }
 
   if (path === '/api/endpoints' && method === 'GET') {
+    const denied = denyForbidden(auth, 'endpoints:read');
+    if (denied) return denied;
     const rows = await env.DB.prepare(`SELECT * FROM endpoints WHERE tenant_id='forge' ORDER BY name`).all();
     return json({ success: true, data: rows.results });
   }
   if (path === '/api/endpoints' && method === 'POST') {
+    const denied = denyForbidden(auth, 'endpoints:write');
+    if (denied) return denied;
     const body = await parseJson(request);
     if (!body || !isString(body.name) || !isString(body.service_type) || !isString(body.internal_url)) {
       return json({ success: false, error: 'name, service_type, internal_url are required strings' }, 400);
@@ -124,6 +149,8 @@ async function routeRequest(
 
   const healthMatch = path.match(/^\/api\/endpoints\/([a-f0-9-]+)\/health$/);
   if (healthMatch && method === 'POST') {
+    const denied = denyForbidden(auth, 'endpoints:health');
+    if (denied) return denied;
     const body = await parseJson(request);
     if (!body || (body.status && !['online', 'offline', 'degraded', 'maintenance'].includes(String(body.status)))) {
       return json({ success: false, error: 'status must be one of online|offline|degraded|maintenance' }, 400);
@@ -142,6 +169,8 @@ async function routeRequest(
   }
 
   if (path === '/api/audit' && method === 'GET') {
+    const denied = denyForbidden(auth, 'audit:read');
+    if (denied) return denied;
     const limit = Number(url.searchParams.get('limit') || 100);
     const offset = Number(url.searchParams.get('offset') || 0);
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) return json({ success: false, error: 'limit must be 1-200' }, 400);
