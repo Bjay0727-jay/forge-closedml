@@ -37,9 +37,13 @@ export async function handleInference(
     return jsonResponse({ success: false, error: violation }, 403, requestId);
   }
 
-  if (classification === 'phi' && await requiresTokenization(env, classification)) {
+  if (await requiresTokenization(env, classification)) {
     if (request.headers.get('X-PHI-Tokenized') !== 'true') {
-      return jsonResponse({ success: false, error: 'PHI requires tokenization and X-PHI-Tokenized: true' }, 403, requestId);
+      ctx.waitUntil(logAuditEvent(env, auth, {
+        event_type: 'inference.blocked', severity: 'warning', action: 'block', resource_type: 'policy', resource_id: classification,
+        details: { reason: 'tokenization_required', request_id: requestId },
+      }, request));
+      return jsonResponse({ success: false, error: `Classification ${classification} requires tokenization; send X-PHI-Tokenized: true` }, 403, requestId);
     }
   }
 

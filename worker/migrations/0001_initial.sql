@@ -123,13 +123,17 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(tenant_id, created_
 CREATE INDEX IF NOT EXISTS idx_audit_lookup ON audit_events(tenant_id, event_type, severity, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_conmon ON audit_events(tenant_id, conmon_period, created_at DESC);
 
+-- Defaults aligned with doc §4.2 and the HIPAA engagement profile (§6.1):
+--   phi, classified, internal require tokenization; cui permitted unencrypted
+--   for lab/federal workloads where tokenization is out-of-band; public is
+--   the only level that leaves on-prem.
 INSERT OR IGNORE INTO classification_policies (id, tenant_id, classification, allowed_destinations, tokenization_required)
 VALUES
 ('cp-public','forge','public','["on-prem","cloud","r2"]',0),
-('cp-internal','forge','internal','["on-prem","cloud"]',0),
+('cp-internal','forge','internal','["on-prem","cloud"]',1),
 ('cp-cui','forge','cui','["on-prem"]',0),
 ('cp-phi','forge','phi','["on-prem"]',1),
-('cp-classified','forge','classified','["on-prem"]',0);
+('cp-classified','forge','classified','["on-prem"]',1);
 
 INSERT OR IGNORE INTO system_config (tenant_id, key, value, updated_by)
 VALUES
