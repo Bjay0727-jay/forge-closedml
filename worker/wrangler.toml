@@ -11,6 +11,16 @@ compatibility_date = "2024-12-01"
 [vars]
 ENVIRONMENT = "production"
 RATE_LIMIT_PER_MINUTE = "120"
+# ── Cloudflare Access integration ──────────────────────────────────────────
+# Until these three are filled in, the worker falls back to the bearer
+# API_SECRET path. To enable full Access-gated auth (JWT + JWKS validation):
+#   1. Zero Trust → Settings → Custom Pages → note your *.cloudflareaccess.com
+#      team domain. Put it in ACCESS_TEAM_DOMAIN (bare host, no scheme).
+#   2. Zero Trust → Access → Applications → select the worker app → copy the
+#      "Application Audience (AUD) Tag". Put it in ACCESS_AUD.
+#   3. ACCESS_JWKS_URL is derived by default from ACCESS_TEAM_DOMAIN; only
+#      override if you fronted JWKS with a caching proxy.
+# Redeploy after filling these in; no code change needed.
 ACCESS_AUD = ""
 ACCESS_TEAM_DOMAIN = ""
 ACCESS_JWKS_URL = ""

@@ -195,6 +195,81 @@ curl https://<worker-host>/ready
 
 ---
 
+## Binding Cloudflare Access (Phase 1)
+
+The worker falls back to `API_SECRET` bearer auth when the three `ACCESS_*`
+vars in `wrangler.toml` are empty. To gate the control plane with human
+identity, follow this flow in the Cloudflare dashboard.
+
+### 1. Identify your team domain
+
+**Zero Trust → Settings → Custom Pages**. The "Team domain" is of the form
+`<team>.cloudflareaccess.com`. Copy the bare host (no `https://`). That goes
+into `ACCESS_TEAM_DOMAIN` in `wrangler.toml`.
+
+### 2. Create the Access application
+
+**Zero Trust → Access → Applications → Add an application → Self-hosted**.
+
+| Field | Value |
+| --- | --- |
+| Application name | `ForgeClosedML Control Plane` |
+| Session duration | `24h` (tighter for regulated tenants) |
+| Application domain | `closedml-api.<your-domain>` (the worker route) |
+| Additional application domains | `closedml.<your-domain>`, `forge-closedml.pages.dev` |
+| Identity providers | your org IdP (Okta / Azure AD / Google Workspace) |
+
+Save. On the application's **Overview** tab, copy the **Application Audience
+(AUD) Tag** (a 64-char hex string) into `ACCESS_AUD`.
+
+### 3. Provision RBAC groups in the IdP
+
+In your IdP, create three groups and assign members:
+
+| IdP group | Role in the worker | Minimum size for smoke test |
+| --- | --- | --- |
+| `admin` | full access incl. promote | 1 |
+| `ml-operator` | register models, manage endpoints, run inference | 1 |
+| `ml-approver` | review + approve production promotions | **2 distinct identities** (required for two-person rule) |
+
+Then in the Access application, add **Policies**:
+
+- Allow `admin` group → group `admin`
+- Allow `ml-operator` group → group `ml-operator`
+- Allow `ml-approver` group → group `ml-approver`
+
+### 4. Fill in `wrangler.toml` and redeploy
+
+```toml
+[vars]
+ACCESS_AUD        = "<64-char hex from step 2>"
+ACCESS_TEAM_DOMAIN = "<team>.cloudflareaccess.com"
+# ACCESS_JWKS_URL  = ""   # leave empty; derived from team domain
+```
+
+Mirror into `[env.staging.vars]` with the staging team domain if separate.
+Redeploy the worker (Workers & Pages → Deployments → Retry latest build, or
+push any commit to trigger Workers Builds).
+
+### 5. Verify
+
+```bash
+# Unauthenticated call now returns an Access login redirect, not a 401
+curl -i https://closedml-api.<your-domain>/api/models
+# HTTP/2 302 with Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/...
+
+# Browser flow: visit the dashboard; Cloudflare Access page challenges you,
+# you log in via IdP, and the JWT flows through to the worker. The dashboard
+# should load normally with RBAC-appropriate actions visible.
+
+# Audit trail
+curl -H "Authorization: Bearer <API_SECRET>" \
+  "https://closedml-api.<your-domain>/api/audit?event_type=auth.denied&limit=5"
+# Expect at least one row from the unauthenticated curl above.
+```
+
+---
+
 ## Local development
 
 ```bash
