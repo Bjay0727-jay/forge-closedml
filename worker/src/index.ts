@@ -259,7 +259,9 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
 function getAllowedOrigin(env: Env, origin?: string | null) {
   const configured = env.CORS_ALLOWED_ORIGIN || DEFAULT_ALLOWED_ORIGIN;
   if (configured === '*') return origin || '*';
-  return origin === configured ? origin : configured;
+  const allowlist = configured.split(',').map((s) => s.trim()).filter(Boolean);
+  if (origin && allowlist.includes(origin)) return origin;
+  return allowlist[0] || DEFAULT_ALLOWED_ORIGIN;
 }
 function corsHeaders(env: Env, origin?: string | null) {
   return {
