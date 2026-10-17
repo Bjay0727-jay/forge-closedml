@@ -25,7 +25,7 @@ flowchart TB
     GW[Gateway Worker<br/>auth → classify → rbac → rate-limit → audit]
     WF[Workflows + Durable Objects<br/>agent runs, approvals, ingestion jobs]
     Q[Queues<br/>ingest, export, eval]
-    D1[(D1<br/>metadata, audit, approvals)]
+    PG[(Postgres via Hyperdrive<br/>managed, US region<br/>metadata, audit, approvals)]
     R2[(R2<br/>uploads quarantine, datasets,<br/>artifacts, evidence bundles)]
     KV[(KV<br/>rate limit, cache)]
     VEC[(Vectorize<br/>public + internal only)]
@@ -47,7 +47,7 @@ flowchart TB
 
   U --> ACC --> DASH --> GW
   P -->|service token| GW
-  GW --> D1 & KV & R2 & VEC
+  GW --> PG & KV & R2 & VEC
   GW --> WF --> Q
   GW ==>|Tunnel| CFD
   CFD --> LLM --> VLLM
@@ -68,7 +68,7 @@ flowchart TB
 | Cloudflare Workflows | New | Durable, resumable multi-step runs (agent runs, ingestion, training orchestration). Native `step.waitForEvent()` is how a run **pauses for human approval**. |
 | Durable Objects | New | Per-run coordination + live status stream (WebSocket) to the dashboard; per-tenant serialization of approvals. |
 | Queues | New | Fan-out for ingestion chunks, eval batches, large ConMon exports (existing TODO). |
-| D1 | Existing, extended | Metadata only. New tables in [`03`](03-agents-and-governance.md#6-proposed-d1-schema-draft). |
+| Postgres (managed, US region) via **Hyperdrive** | New — replaces D1 ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)) | Metadata, audit, approvals only. Existing D1 tables migrate in Phase 0.5; new tables in [`03`](03-agents-and-governance.md#6-proposed-postgres-schema-draft). |
 | R2 | Existing (`MODEL_BUCKET`), + new `DATA_BUCKET` | `quarantine/`, `datasets/`, `evidence/` prefixes for **public / internal** data; restricted data is never written here (see §4). |
 | Vectorize | New | Vector index for `public` and `internal` knowledge only. |
 | KV | Existing (`INFERENCE_CACHE`) | Rate-limit counters, short-lived caches. Never caches restricted prompts or outputs. |
@@ -161,6 +161,13 @@ the rest:
 | `phi` | MinIO, tokenized | Qdrant | on-prem only, `X-PHI-Tokenized` | **never** |
 | `classified` | MinIO (enclave) | Qdrant | on-prem only | **never** |
 
+**Where the data plane runs also limits classification.** Each registered
+endpoint gets an `allowed_classifications` list (new column on `endpoints`).
+The pilot GPU host on Hetzner ([ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md))
+is registered as `public` / `internal` only; CUI, PHI and classified requests
+are routed only to endpoints on customer premises or a US FedRAMP / GovCloud
+host, and the gateway refuses the request if no such endpoint exists.
+
 `enforceClassification(env, classification, destination)` in
 `worker/src/middleware/classify.ts` is reused unchanged — callers just pass the
 new destination (`'vectorize'`, `'r2'`, `'on-prem'`). `AllowedDestination` in
@@ -170,12 +177,12 @@ new destination (`'vectorize'`, `'r2'`, `'on-prem'`). `AllowedDestination` in
 
 | Aspect | **Hybrid** (default) | **Air-gap** (per-tenant switch) |
 |---|---|---|
-| Control plane | Cloudflare Workers, D1, R2, KV, Vectorize, Workflows | Same Worker code run locally on `workerd` (see [ADR-0006](../adr/0006-air-gap-runtime.md)) |
+| Control plane | Cloudflare Workers, Hyperdrive → managed Postgres, R2, KV, Vectorize, Workflows | Same Worker code run locally on `workerd` (see [ADR-0006](../adr/0006-air-gap-runtime.md)) |
 | Identity | Cloudflare Access + IdP | Local OIDC (Keycloak) issuing the same JWT claims (`email`, `groups`) |
-| Metadata DB | D1 | SQLite (D1 is SQLite — same migrations) |
+| Metadata DB | Managed Postgres (US) via Hyperdrive | Postgres on-prem (same migrations, same driver) |
 | Objects | R2 + MinIO | MinIO only |
 | Vectors | Vectorize + Qdrant | Qdrant only |
-| Orchestration | Cloudflare Workflows | Local workflow adapter (same step interface), backed by SQLite |
+| Orchestration | Cloudflare Workflows | Local workflow adapter (same step interface), backed by Postgres |
 | Updates | `git` + Workers Builds | Signed offline bundle (containers + models + migrations), verified on import |
 | Network | Outbound-only tunnel | None — no route to the internet |
 

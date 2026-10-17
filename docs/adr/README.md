@@ -12,3 +12,5 @@ that introduces it is approved and merged (Gate G0).
 | [0004](0004-rules-engine-authority.md) | Deterministic rules engine is authoritative over LLM judgments | Proposed |
 | [0005](0005-predictive-stack.md) | Predictive stack: LightGBM + MLflow + FastAPI scorer | Proposed |
 | [0006](0006-air-gap-runtime.md) | Air-gap runtime: same Worker code on workerd with local adapters | Proposed |
+| [0007](0007-postgres-via-hyperdrive.md) | Control-plane database: managed US Postgres via Hyperdrive (replaces D1) | Proposed |
+| [0008](0008-pilot-gpu-hosting-hetzner.md) | Pilot GPU host on Hetzner, restricted to non-sensitive data | Proposed |

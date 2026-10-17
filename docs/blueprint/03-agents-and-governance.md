@@ -71,11 +71,11 @@ cannot call them. They exist only as human UI actions.
 | Gate | Trigger | Approver role | Evidence recorded | Blocks |
 |---|---|---|---|---|
 | **G0** Design | Any PR | Forge engineering lead | GitHub review + merge | Merge |
-| **G1** Data | New source/dataset reaches `pending_approval` | `data-steward` (new role) | classification confirmed, scan result, hash | Ingestion / training use |
+| **G1** Data | New source/dataset reaches `pending_approval` | `data-steward` (public/internal) or `data-steward-restricted` (cui/phi/classified) | classification confirmed, scan result, hash | Ingestion / training use |
 | **G2** Training | `training_jobs` created | `approver` | dataset ids, config hash, GPU-hour budget | Job start |
 | **G3** Promotion | Version → `production` | two distinct `approver`s | eval + red-team report ids, both identities | Existing `promoteModel` in `worker/src/handlers/models.ts` + new eval precondition |
 | **G4** Agent action | Tool call above auto tier | run owner or assigned role | proposed action, diff, agent rationale, sources | Workflow `waitForEvent` |
-| **G5** Reserved | Human-only UI action | designated authority (AO, SCA, ISSO) | signer identity, statement, linked AI artifacts | n/a — never automated |
+| **G5** Reserved | Human-only UI action | the person **assigned** to that system as `rmf-ao`, `rmf-sca` or `rmf-isso` (see §5.2) | signer identity, role assignment id, statement, linked AI artifacts | n/a — never automated |
 
 Every gate decision writes `audit_events` with event types:
 
@@ -124,88 +124,130 @@ sources, the confidence and rules-engine verdict, and what is irreversible.
 
 ## 5. Roles (extends `worker/src/middleware/rbac.ts`)
 
-| Role | IdP group | New permissions |
+### 5.1 Platform roles and IdP groups
+
+IdP group names are **tenant-prefixed** — `<tenant>-<group>` — so each future
+customer gets its own groups in its own (or Forge's) IdP without collisions.
+Forge's own tenant uses the prefix `forge-`. The existing un-prefixed groups
+(`admin`, `ml-operator`, `ml-approver`) keep working for tenant `forge` during
+migration and are renamed to `forge-*` in Phase 0.5. `getRoles()` parses the
+prefix, checks it against the caller's tenant, and ignores groups for any
+other tenant.
+
+| Role | IdP group | Permissions (new in **bold**) |
 |---|---|---|
-| `viewer` | — | `knowledge:read`, `agents:read`, `predict:read` |
-| `operator` | `ml-operator` | + `knowledge:write`, `agents:run`, `datasets:write`, `training:write` |
-| `approver` | `ml-approver` | + `training:approve`, `agents:approve` |
-| `data-steward` | `data-steward` (new) | `datasets:approve`, `knowledge:approve` |
-| `authority` | `rmf-authority` (new) | `decisions:sign` (G5 only) |
-| `admin` | `admin` | all + `agents:halt`, `config:write` |
-| `service` | service token | `inference:invoke`, `endpoints:health`, `knowledge:read` (scoped) |
+| `viewer` | — (any authenticated member) | `models:read`, `endpoints:read`, `audit:read`, **`knowledge:read`, `agents:read`, `predict:read`** |
+| `operator` | `<tenant>-ml-operator` | existing + **`knowledge:write`, `agents:run`, `datasets:write`, `training:write`** |
+| `approver` | `<tenant>-ml-approver` | existing + **`training:approve`** (G2), `models:promote` (G3) |
+| `data-steward` | `<tenant>-ai-data-steward` | **`knowledge:approve`, `datasets:approve`** for `public` / `internal` (G1) |
+| `data-steward-restricted` | `<tenant>-ai-data-steward-restricted` | same, for **all** classifications incl. `cui` / `phi` / `classified` (G1). Typical holders: customer data owner, Privacy Officer (PHI), FSO/ISSM (classified) |
+| `rmf-isso` | `<tenant>-rmf-isso` | eligible for ISSO assignment (§5.2) |
+| `rmf-sca` | `<tenant>-rmf-assessor` | eligible for SCA (assessor) assignment |
+| `rmf-ao` | `<tenant>-rmf-authorizing-official` | eligible for AO assignment |
+| `admin` | `<tenant>-admin` | all + **`agents:halt`, `config:write`, `roles:assign`** |
+| `service` | service token | `inference:invoke`, `endpoints:health`, **`knowledge:read`** (scoped) |
 
-## 6. Proposed D1 schema (draft)
+### 5.2 RMF roles: group = eligibility, assignment = authority
 
-> Draft for review only. Becomes `worker/migrations/0002_*.sql` in Phase 3a+.
-> Follows `0001_initial.sql` conventions: `TEXT` ids, `tenant_id` default
-> `'forge'`, ISO timestamps, JSON in `*_json` columns.
+Following NIST SP 800-37 Rev 2, the reserved (G5) decisions are split across
+three roles. **Being in the IdP group only makes a person eligible.** Authority
+to act on a specific system comes from a per-system **assignment** recorded in
+Postgres (`system_role_assignments`, §6), made by a tenant `admin` and audited.
+
+| Role | Signs (G5) | May approve (G4) | Cannot |
+|---|---|---|---|
+| `rmf-isso` | Proposed security categorization; POA&M milestone changes | Agent actions on assigned systems | Sign assessment conclusions or accept risk |
+| `rmf-sca` | Assessment conclusions (satisfied / other-than-satisfied); SAR sign-off | Evidence-review / finding publication on assigned systems | Accept risk; hold ISSO role on the same system |
+| `rmf-ao` | Risk acceptance; ATO / IATT / DATO; closing POA&M items | — | Start agent runs; hold SCA or ISSO on the same system |
+
+Enforcement rules (checked on every G4/G5 action):
+
+1. The actor must be in the eligible group **and** hold an active assignment
+   for that `(tenant, system, role)`.
+2. **Conflict of interest:** the platform refuses an assignment that would give
+   one person `rmf-sca` + `rmf-isso`, or `rmf-ao` + either other role, on the
+   same system (assessor independence, per 800-37).
+3. Assignments have `valid_from` / `valid_until`; expired assignments grant
+   nothing. Removing someone from the IdP group revokes eligibility
+   immediately even if an assignment remains.
+4. Assignment create / revoke writes `role.assignment.created` /
+   `role.assignment.revoked` audit events.
+
+## 6. Proposed Postgres schema (draft)
+
+> Draft for review only. The control plane moves from D1 to managed Postgres
+> via Hyperdrive ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)); the
+> existing `0001_initial.sql` tables are ported in Phase 0.5 and these become
+> later migrations in Phase 3a+. Conventions kept from `0001_initial.sql`:
+> `TEXT` ids, `tenant_id` default `'forge'`, JSON in `*_json` columns (now
+> `JSONB`), timestamps as `TIMESTAMPTZ`.
 
 ```sql
 CREATE TABLE knowledge_collections (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   name TEXT NOT NULL, classification TEXT NOT NULL,
   vector_backend TEXT NOT NULL,            -- 'vectorize' | 'qdrant'
-  system_id TEXT, shared INTEGER NOT NULL DEFAULT 0,
-  created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  system_id TEXT, shared BOOLEAN NOT NULL DEFAULT false,
+  created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(tenant_id, name)
 );
 
 CREATE TABLE knowledge_sources (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   collection_id TEXT NOT NULL REFERENCES knowledge_collections(id),
-  filename TEXT NOT NULL, mime_type TEXT, size_bytes INTEGER,
+  filename TEXT NOT NULL, mime_type TEXT, size_bytes BIGINT,
   sha256_hash TEXT NOT NULL, storage_uri TEXT NOT NULL,   -- r2:// or minio://
   classification TEXT NOT NULL, suggested_classification TEXT,
   status TEXT NOT NULL DEFAULT 'uploaded',  -- see state diagram in 02
-  chunk_count INTEGER, retention_until TEXT,
+  chunk_count INTEGER, retention_until TIMESTAMPTZ,
   uploaded_by TEXT NOT NULL, approved_by TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE datasets (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   name TEXT NOT NULL, purpose TEXT NOT NULL,  -- 'fine_tune' | 'predictive' | 'eval'
-  classification TEXT NOT NULL, source_ids_json TEXT NOT NULL,
+  classification TEXT NOT NULL, source_ids_json JSONB NOT NULL,
   record_count INTEGER, sha256_hash TEXT, storage_uri TEXT,
   status TEXT NOT NULL DEFAULT 'draft',       -- draft | pending_approval | approved | retired
   created_by TEXT NOT NULL, approved_by TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE training_jobs (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   kind TEXT NOT NULL,                         -- 'qlora' | 'dpo' | 'lightgbm'
-  base_model TEXT, dataset_ids_json TEXT NOT NULL, config_json TEXT NOT NULL,
-  config_sha256 TEXT NOT NULL, gpu_hours_budget REAL,
+  base_model TEXT, dataset_ids_json JSONB NOT NULL, config_json JSONB NOT NULL,
+  config_sha256 TEXT NOT NULL, gpu_hours_budget DOUBLE PRECISION,
   status TEXT NOT NULL DEFAULT 'pending_approval', -- pending_approval|queued|running|succeeded|failed|cancelled
   mlflow_run_id TEXT, output_model_version_id TEXT,
   requested_by TEXT NOT NULL, approved_by TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ
 );
 
 CREATE TABLE eval_results (
   id TEXT PRIMARY KEY, model_version_id TEXT NOT NULL REFERENCES model_versions(id),
   suite TEXT NOT NULL,                        -- 'golden-rmf' | 'red-team' | 'regression'
-  metrics_json TEXT NOT NULL, passed INTEGER NOT NULL,
-  report_uri TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  metrics_json JSONB NOT NULL, passed BOOLEAN NOT NULL,
+  report_uri TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE agent_runs (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
-  agent TEXT NOT NULL, goal TEXT NOT NULL, scope_json TEXT NOT NULL,
+  agent TEXT NOT NULL, goal TEXT NOT NULL, scope_json JSONB NOT NULL,
   autonomy_cap TEXT NOT NULL,                 -- 'L1'..'L4'
-  budget_json TEXT NOT NULL, workflow_instance_id TEXT,
+  budget_json JSONB NOT NULL, workflow_instance_id TEXT,
   status TEXT NOT NULL DEFAULT 'running',     -- running|awaiting_approval|halted|completed|failed
   started_by TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ
 );
 
 CREATE TABLE agent_steps (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
   seq INTEGER NOT NULL, agent TEXT NOT NULL, tool TEXT NOT NULL, risk_tier TEXT NOT NULL,
   input_summary TEXT, output_summary TEXT,    -- no restricted content; summaries/ids only
-  source_ids_json TEXT, tokens INTEGER, latency_ms INTEGER, status TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  source_ids_json JSONB, tokens INTEGER, latency_ms INTEGER, status TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(run_id, seq)
 );
 
@@ -213,28 +255,44 @@ CREATE TABLE approval_requests (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   gate TEXT NOT NULL,                         -- 'G1'|'G2'|'G4'
   resource_type TEXT NOT NULL, resource_id TEXT NOT NULL,
-  requested_by TEXT NOT NULL, required_role TEXT NOT NULL,
-  proposal_json TEXT NOT NULL, rationale TEXT,
+  requested_by TEXT NOT NULL, required_role TEXT NOT NULL,           -- e.g. 'data-steward-restricted' when classification is cui/phi/classified
+  system_id TEXT,                         -- set for G4; approver must hold an assignment on it
+  proposal_json JSONB NOT NULL, rationale TEXT,
   status TEXT NOT NULL DEFAULT 'pending',     -- pending|approved|rejected|edited|expired
-  decided_by TEXT, decision_note TEXT, edited_json TEXT,
-  expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')), decided_at TEXT
+  decided_by TEXT, decision_note TEXT, edited_json JSONB,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), decided_at TIMESTAMPTZ
 );
 
 CREATE TABLE predictions (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   model_version_id TEXT NOT NULL, target TEXT NOT NULL,
   subject_type TEXT NOT NULL, subject_id TEXT NOT NULL,  -- e.g. 'control', 'AC-2@system-x'
-  score REAL NOT NULL, explanation_json TEXT NOT NULL,   -- top SHAP contributions
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  score DOUBLE PRECISION NOT NULL, explanation_json JSONB NOT NULL,   -- top SHAP contributions
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE system_role_assignments (
+  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
+  system_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('rmf-isso','rmf-sca','rmf-ao')),
+  assignee_identity TEXT NOT NULL,          -- IdP email / sub
+  valid_from TIMESTAMPTZ NOT NULL DEFAULT now(), valid_until TIMESTAMPTZ,
+  assigned_by TEXT NOT NULL, revoked_by TEXT, revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(tenant_id, system_id, role, assignee_identity)
+);
+-- Conflict-of-interest rule (§5.2) is enforced in the service layer before insert
+-- and re-checked at decision time.
 
 CREATE TABLE reserved_decisions (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   decision_type TEXT NOT NULL,                -- 'assessment_conclusion'|'risk_acceptance'|'authorization'|'poam_close'
   subject_id TEXT NOT NULL, statement TEXT NOT NULL,
-  signed_by TEXT NOT NULL, ai_artifact_ids_json TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  signed_by TEXT NOT NULL,
+  role_assignment_id TEXT NOT NULL REFERENCES system_role_assignments(id),
+  ai_artifact_ids_json JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -243,7 +301,7 @@ Indexes follow the existing `idx_<table>_<purpose>` pattern on
 
 ## 7. AI accountability record
 
-For every AI-produced artifact the platform can answer, from D1 + audit alone:
+For every AI-produced artifact the platform can answer, from Postgres + audit alone:
 which model version (and its eval report), which prompt template version,
 which sources were retrieved, which agent and run, who approved it, and what
 they changed. That is the "AI bill of materials" for a finding or narrative.

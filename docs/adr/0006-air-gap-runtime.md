@@ -14,12 +14,12 @@ implementations:
 
 | Interface | Cloudflare | Air-gap |
 |---|---|---|
-| Metadata DB | D1 | SQLite (same migrations) |
+| Metadata DB | Managed Postgres via Hyperdrive | Postgres on-prem (same migrations) |
 | `ObjectStore` | R2 | MinIO |
 | `VectorStore` | Vectorize / Qdrant | Qdrant |
-| `WorkflowRunner` | Workflows + DO | local SQLite-backed runner |
+| `WorkflowRunner` | Workflows + DO | local Postgres-backed runner |
 | `IdentityVerifier` | CF Access JWKS | Keycloak OIDC JWKS (same claims) |
-| KV | KV | SQLite table |
+| KV | KV | Postgres table (or Redis) |
 
 Releases ship as **signed offline bundles** (image digests, model weights,
 migrations, SBOM). Verified before import.

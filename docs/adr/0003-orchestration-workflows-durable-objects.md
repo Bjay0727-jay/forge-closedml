@@ -15,7 +15,7 @@ Use **Cloudflare Workflows** for durable step execution — each tool call is a
 All tool execution happens through the gateway to on-prem services.
 
 Behind a `WorkflowRunner` interface so air-gap mode can use a local runner
-(SQLite-backed step log; Temporal is the fallback if needed).
+(Postgres-backed step log; Temporal is the fallback if needed).
 
 Alternatives: LangGraph / CrewAI on-prem — richer agent libraries but adds a
 second control plane outside the gateway's audit path. We may still use a

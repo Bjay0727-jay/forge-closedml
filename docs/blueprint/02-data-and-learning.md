@@ -133,13 +133,27 @@ flowchart LR
   assessments), use a Forge-wide model trained on anonymized, approved data,
   plus rules-based heuristics.
 
-## 6. Retention
+## 6. Retention (decided: best-practice defaults)
 
-| Item | Default retention | Configurable per tenant |
-|---|---|---|
-| Uploaded raw files | Engagement length + 1 year | Yes |
-| Chunks / vectors | Same as source | Follows source |
-| Prompts and outputs | **Not stored** for restricted classes (existing assumption #7); stored 90 days for public/internal when the tenant opts in | Yes |
-| Agent run transcripts | 1 year (metadata); content follows classification rule above | Yes |
-| Audit events | 7 years | No (minimum) |
-| Training datasets / adapters | Life of model version + 1 year | Yes |
+Defaults are set by the strictest regime a Forge tenant commonly falls under,
+so a single default works for FedRAMP/FISMA, CMMC and HIPAA customers. Tenants
+may **lengthen** any value; shortening below a *minimum* requires an `admin`
+change that is itself audited.
+
+| Item | Default retention | Driver | Tenant can change |
+|---|---|---|---|
+| Audit events, gate decisions, reserved (G5) decisions, role assignments | **7 years** | Covers HIPAA documentation (6 yrs, 45 CFR 164.316), CMMC artifact retention (6 yrs, 32 CFR 170), NIST AU-11 | Lengthen only (minimum) |
+| Evidence files supporting an assessment | **6 years** after the assessment they support | CMMC / HIPAA; lets a finding be defended later | Yes |
+| Other uploaded raw files (policies, reference docs) | Engagement end + 1 year | Data minimization | Yes |
+| Chunks / vectors | Follow their source; purged within 30 days of source purge | Derived data must not outlive its source | Follows source |
+| Prompts and outputs | **Not stored** for `cui` / `phi` / `classified` (existing README assumption #7). `public` / `internal`: 90 days, only if the tenant opts in | Minimization; LLM02 | Yes |
+| AI drafts that became records (approved narratives, findings, POA&M items) | Same as the record (6 years) | They are part of the assessment record | Follows record |
+| Agent run metadata and step summaries | 6 years | AI accountability record (§7 of `03`) | Yes |
+| Predictions | 2 years; any prediction cited in a decision is kept with that decision | Drift analysis + accountability | Yes |
+| Training datasets, adapters, eval and red-team reports | Life of the model version + 3 years | Provenance and reproducibility (SR-4) | Yes |
+| Operational logs / telemetry | 12 months hot + 18 months archive | OMB M-21-31 log-management guidance | Yes |
+| Backups | 35 days point-in-time; monthly snapshots kept 12 months | Recovery; deletes propagate within one backup cycle | Yes |
+
+**Overrides:** a legal hold set by an `admin` suspends purge for the affected
+items until released (both actions audited). Purges always leave a tombstone
+(id, hash, who, when, why) for the audit trail.

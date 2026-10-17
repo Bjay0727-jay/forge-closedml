@@ -43,12 +43,21 @@ gantt
 
 ## Phase 0.5 — CI/CD hardening (existing README TODO)
 
-Scope: GitHub Actions for worker (typecheck, `node --test`), dashboard
-(typecheck, build), semgrep SAST, `npm audit`/dependency review,
-`wrangler deploy --dry-run`; zod schemas for request bodies; first migration
-runner (`migrations/0002_*` applied in order).
+Scope:
+- GitHub Actions for worker (typecheck, `node --test`), dashboard (typecheck,
+  build), semgrep SAST, `npm audit`/dependency review, `wrangler deploy --dry-run`.
+- zod schemas for request bodies.
+- **D1 → Postgres** ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)):
+  provision managed US-region Postgres (prod + staging), Hyperdrive configs,
+  a `Db` interface replacing direct `env.DB.prepare` calls, port
+  `0001_initial.sql`, migration runner, data copy from the pilot D1, then
+  retire the D1 binding. This also clears the D1 account-cap blocker.
+- Tenant-prefixed IdP groups (`forge-admin`, `forge-ml-operator`,
+  `forge-ml-approver`) with backward-compatible parsing in `rbac.ts`.
 
-Acceptance: every PR shows green checks; a deliberately failing test blocks merge.
+Acceptance: every PR shows green checks; a deliberately failing test blocks
+merge; staging and production run on separate Postgres databases; all 11
+README smoke tests pass against Postgres; audit row counts match D1 after copy.
 
 ## Phase 3a — Knowledge / RAG + data intake
 
@@ -88,7 +97,7 @@ Acceptance: "Assess AC family for System X" runs end-to-end, pauses for G4 befor
 
 ## Phase 4a — Predictive
 
-Scope: feature pipeline from D1 + scan/POA&M history; LightGBM control-failure-risk and evidence-expiry models; MLflow registration; `scorer` service; `/api/predict/*`; SHAP explanations; `predictions` table; drift job.
+Scope: feature pipeline from Postgres + scan/POA&M history; LightGBM control-failure-risk and evidence-expiry models; MLflow registration; `scorer` service; `/api/predict/*`; SHAP explanations; `predictions` table; drift job.
 
 Acceptance: held-out AUC ≥ 0.75 for control-failure risk (or documented baseline if data is thin); calibration error < 0.1; every prediction shows top-5 drivers; promotion through G3.
 
@@ -100,13 +109,13 @@ Acceptance: `forge-compliance-v2` trained from approved data, beats v1 on golden
 
 ## Phase 4c — Air-gap packaging + signing
 
-Scope: `workerd`-based local control plane, SQLite/MinIO/Qdrant/Keycloak adapters, local workflow runner, offline signed bundle build + verifier; asymmetric audit signing replacing the HMAC placeholder.
+Scope: `workerd`-based local control plane, on-prem Postgres/MinIO/Qdrant/Keycloak adapters, local workflow runner, offline signed bundle build + verifier; asymmetric audit signing replacing the HMAC placeholder.
 
 Acceptance: fresh, network-isolated host installs from bundle and passes the existing 11-step smoke test plus Phase 3a–4b acceptance tests, with no outbound connections (verified by firewall logs).
 
 ---
 
-## Hardware sizing (on-prem GPU host)
+## Hardware sizing and hosting (GPU host)
 
 | Tier | Use | Suggested spec |
 |---|---|---|
@@ -117,12 +126,21 @@ Acceptance: fresh, network-isolated host installs from bundle and passes the exi
 Training can share the serving host in pilot (scheduled off-hours); split to a
 dedicated trainer node at production.
 
+**Decided: pilot box = Hetzner GEX130** (1× RTX 6000 Ada 48 GB, Xeon Gold
+5412U, 128 GB RAM — upgrade RAM if available) — see
+[ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md). Hetzner GEX131 (96 GB
+Blackwell) is the step-up option. Constraint: Hetzner GPU servers are in
+Germany / Finland with no FedRAMP authorization or HIPAA BAA, so the pilot
+host is limited to **`public` / `internal` / synthetic data**. CUI, PHI and
+classified workloads run only on customer premises or a US FedRAMP / GovCloud
+GPU host, enforced by a per-endpoint `allowed_classifications` setting.
+
 ## Cloudflare products used (and alternatives)
 
 | Need | Cloudflare (default) | Alternative if needed |
 |---|---|---|
 | API / gateway | Workers | — |
-| Metadata | D1 | Postgres via Hyperdrive (if D1 limits bite — note the 10-DB cap already hit) |
+| Metadata | **Postgres via Hyperdrive** (managed, US region, e.g. Neon or AWS RDS) — decided, replaces D1 | Postgres on-prem (air-gap) |
 | Objects | R2 | — |
 | Vectors (non-restricted) | Vectorize | Qdrant everywhere |
 | Orchestration | Workflows + Durable Objects | Temporal on-prem (air-gap) |
@@ -130,10 +148,16 @@ dedicated trainer node at production.
 | Identity | Access | Keycloak (air-gap) |
 | Inference | **on-prem** (Workers AI only for `public` demos, opt-in) | — |
 
-## Open items for the human reviewer
+## Reviewer decisions (recorded 2026-10-17)
 
-1. Confirm the new roles `data-steward` and `rmf-authority` and their IdP group names.
-2. Confirm default tenant autonomy cap = **L2**.
-3. Confirm retention defaults in [`02` §6](02-data-and-learning.md#6-retention).
-4. Approve GPU purchase tier for pilot.
-5. Resolve the Cloudflare D1 account cap (README "Known pilot constraints" #1) before Phase 3a adds a staging DB.
+| # | Item | Decision |
+|---|---|---|
+| 1 | Roles | Data steward split into `data-steward` / `data-steward-restricted`; RMF authority split into NIST 800-37 `rmf-isso`, `rmf-sca`, `rmf-ao`. IdP group = eligibility, per-system assignment = authority. Groups tenant-prefixed (`<tenant>-…`). See [`03` §5](03-agents-and-governance.md#5-roles-extends-workersrcmiddlewarerbacts). |
+| 2 | Default autonomy cap | **L2 (Copilot)** for new tenants. |
+| 3 | Retention | Best-practice defaults in [`02` §6](02-data-and-learning.md#6-retention-decided-best-practice-defaults). |
+| 4 | Pilot GPU | Single 48 GB box on Hetzner (GEX130), public/internal/synthetic data only ([ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md)). |
+| 5 | Metadata DB | Move from D1 to managed US-region Postgres via Hyperdrive in Phase 0.5 ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)); resolves the D1 account cap. |
+
+### Still open
+- Pick the managed Postgres provider (Neon vs AWS RDS) at Phase 0.5 planning.
+- Confirm current Hetzner GEX130 price/availability before ordering.

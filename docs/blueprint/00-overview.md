@@ -66,7 +66,7 @@ Level 4 (conditional autonomy).** Level 5 is out of scope.
 | L5 | High autonomy | — | **Not permitted** |
 
 Each tenant and each agent has a **maximum autonomy level** configured by an
-`admin`. Default for new tenants: **L2**.
+`admin`. Default for new tenants: **L2 (Copilot)** — decided.
 
 ### Reserved human decisions (never delegated — Gate G5)
 
@@ -82,11 +82,11 @@ Each tenant and each agent has a **maximum autonomy level** configured by an
 | Gate | Decision | Who | Enforced by |
 |---|---|---|---|
 | G0 | Design / code change | Forge engineering lead | GitHub PR review + merge |
-| G1 | Data source or dataset admitted | Data owner (`data-steward` role) | `approval_requests` + ingestion pipeline |
+| G1 | Data source or dataset admitted | Data owner (`data-steward` for public/internal, `data-steward-restricted` for CUI/PHI/classified) | `approval_requests` + ingestion pipeline |
 | G2 | Training run launched | `approver` | `training_jobs` state machine |
 | G3 | Model promoted to production | Two distinct `approver`s + passing eval | Existing `handlers/models.ts` + eval check |
 | G4 | Agent action above auto tier | Assigned human (ISSO, assessor, operator) | Workflow pause + `approval_requests` |
-| G5 | Reserved decisions | Designated authority (AO, SCA, ISSO) | Not callable by any agent tool |
+| G5 | Reserved decisions | The person assigned to that system as AO, SCA or ISSO (NIST SP 800-37 roles) | Not callable by any agent tool; per-system assignment required |
 
 Details: [`03-agents-and-governance.md`](03-agents-and-governance.md).
 
