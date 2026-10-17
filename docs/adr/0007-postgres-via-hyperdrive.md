@@ -11,8 +11,9 @@ relational, JSON-heavy tables (approvals, agent runs, role assignments), and
 air-gap mode needs the same database on-prem.
 
 ## Decision
-Move the control-plane database to **managed Postgres in a US region** (Neon
-or AWS RDS; provider chosen at Phase 0.5 planning), reached from Workers
+Move the control-plane database to **Neon** managed Postgres in a US region
+(chosen by the reviewer 2026-10-17; `main` branch = production, `staging`
+branch = staging), reached from Workers
 through **Cloudflare Hyperdrive** (connection pooling + query caching at the
 edge). Separate databases for production and staging.
 

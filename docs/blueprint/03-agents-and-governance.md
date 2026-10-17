@@ -10,7 +10,8 @@ not an agent — it is deterministic and is the authority on compliance facts.
 
 ```mermaid
 flowchart TB
-  H[Human owner of the run<br/>ISSO / assessor / operator]
+  H[Run initiator<br/>operator / assessor]
+  AP[Assigned approver<br/>ISSO or SCA on that system,<br/>never the initiator]
   S[Supervisor agent<br/>plans, delegates, enforces budget + autonomy cap]
   subgraph Specialists
     CAT[Categorization agent]
@@ -32,7 +33,7 @@ flowchart TB
   H -->|start + scope| S
   S --> CAT & EV & GAP & DR & PO & CM
   CAT & EV & GAP & DR & PO & CM --> Tools
-  REQ -->|G4| H
+  REQ -->|G4| AP
 ```
 
 ## 2. Agent catalog (CanaPoint RMF)
@@ -74,7 +75,7 @@ cannot call them. They exist only as human UI actions.
 | **G1** Data | New source/dataset reaches `pending_approval` | `data-steward` (public/internal) or `data-steward-restricted` (cui/phi/classified) | classification confirmed, scan result, hash | Ingestion / training use |
 | **G2** Training | `training_jobs` created | `approver` | dataset ids, config hash, GPU-hour budget | Job start |
 | **G3** Promotion | Version → `production` | two distinct `approver`s | eval + red-team report ids, both identities | Existing `promoteModel` in `worker/src/handlers/models.ts` + new eval precondition |
-| **G4** Agent action | Tool call above auto tier | run owner or assigned role | proposed action, diff, agent rationale, sources | Workflow `waitForEvent` |
+| **G4** Agent action | Tool call above auto tier | a person **other than the run initiator** who holds the required role and an active assignment on the run's system (§5.2) | proposed action, diff, agent rationale, sources (restricted payloads by reference only, §6.1) | Workflow `waitForEvent` |
 | **G5** Reserved | Human-only UI action | the person **assigned** to that system as `rmf-ao`, `rmf-sca` or `rmf-isso` (see §5.2) | signer identity, role assignment id, statement, linked AI artifacts | n/a — never automated |
 
 Every gate decision writes `audit_events` with event types:
@@ -95,6 +96,14 @@ These flow into the existing `/api/audit/export` bundle per `conmon_period`.
 
 - **Separation of duties**: the person who started a run, uploaded a dataset,
   or launched a training job cannot approve their own G1/G2/G4 request.
+  Enforced in the service layer: `decided_by` must differ from
+  `requested_by` and, for G4, from `agent_runs.started_by`.
+- **Approver routing (G4)**: every G4 request names a `required_role` and
+  `system_id`; it is routed to the people holding an active assignment for
+  that role on that system, excluding the initiator. **Pre-flight check:** a
+  run cannot start unless at least one eligible approver other than the
+  initiator exists for every tier it may need to pause on; otherwise the
+  start is refused with a clear message instead of stranding the run.
 - **Timeouts**: unanswered G4 requests expire (default 72 h) → run halts safely;
   nothing is auto-approved on timeout.
 - **Edit-then-approve**: approvers can modify a proposed draft; the original vs
@@ -257,9 +266,19 @@ CREATE TABLE approval_requests (
   resource_type TEXT NOT NULL, resource_id TEXT NOT NULL,
   requested_by TEXT NOT NULL, required_role TEXT NOT NULL,           -- e.g. 'data-steward-restricted' when classification is cui/phi/classified
   system_id TEXT,                         -- set for G4; approver must hold an assignment on it
-  proposal_json JSONB NOT NULL, rationale TEXT,
+  run_id TEXT REFERENCES agent_runs(id),  -- set for G4; approver must not be the run's started_by
+  classification TEXT NOT NULL,           -- highest classification of anything in the payload
+  summary TEXT NOT NULL,                  -- redacted, non-restricted description shown in the inbox list
+  proposal_json JSONB, rationale TEXT,    -- inline payload: public/internal ONLY
+  payload_uri TEXT,                       -- minio://… opaque reference for restricted payloads (proposal, rationale, diff, edits)
   status TEXT NOT NULL DEFAULT 'pending',     -- pending|approved|rejected|edited|expired
-  decided_by TEXT, decision_note TEXT, edited_json JSONB,
+  decided_by TEXT, decision_note TEXT, edited_json JSONB,  -- edited_json: public/internal ONLY
+  CHECK (decided_by IS NULL OR decided_by <> requested_by),
+  CHECK (
+    (classification IN ('public','internal') AND payload_uri IS NULL AND proposal_json IS NOT NULL)
+    OR (classification IN ('cui','phi','classified') AND payload_uri IS NOT NULL
+        AND proposal_json IS NULL AND rationale IS NULL AND edited_json IS NULL)
+  ),
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), decided_at TIMESTAMPTZ
 );
@@ -279,22 +298,46 @@ CREATE TABLE system_role_assignments (
   assignee_identity TEXT NOT NULL,          -- IdP email / sub
   valid_from TIMESTAMPTZ NOT NULL DEFAULT now(), valid_until TIMESTAMPTZ,
   assigned_by TEXT NOT NULL, revoked_by TEXT, revoked_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(tenant_id, system_id, role, assignee_identity)
+  revoke_reason TEXT,                       -- 'revoked' | 'expired' | 'conflict' | 'left_group'
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- History is kept for the 7-year retention period; only ONE active term per
+-- person/role/system. A daily job stamps revoked_at + revoke_reason='expired'
+-- once valid_until passes, so a person can later be re-appointed.
+CREATE UNIQUE INDEX uq_system_role_assignments_active
+  ON system_role_assignments (tenant_id, system_id, role, assignee_identity)
+  WHERE revoked_at IS NULL;
 -- Conflict-of-interest rule (§5.2) is enforced in the service layer before insert
 -- and re-checked at decision time.
 
 CREATE TABLE reserved_decisions (
   id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'forge',
   decision_type TEXT NOT NULL,                -- 'assessment_conclusion'|'risk_acceptance'|'authorization'|'poam_close'
-  subject_id TEXT NOT NULL, statement TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  classification TEXT NOT NULL,
+  statement TEXT,                           -- public/internal only
+  statement_uri TEXT,                       -- minio://… for restricted statements
+  CHECK ((classification IN ('public','internal') AND statement IS NOT NULL AND statement_uri IS NULL)
+      OR (classification IN ('cui','phi','classified') AND statement IS NULL AND statement_uri IS NOT NULL)),
   signed_by TEXT NOT NULL,
   role_assignment_id TEXT NOT NULL REFERENCES system_role_assignments(id),
   ai_artifact_ids_json JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
+
+### 6.1 Restricted content in approvals and decisions
+
+An approval or decision about CUI, PHI or classified material can itself
+contain restricted content (a finding's text, a diff, the approver's edits).
+Those payloads are **never stored in Postgres**. The row holds only routing
+metadata, a redacted `summary`, the `classification`, and an opaque
+`payload_uri` / `statement_uri` pointing to on-prem MinIO. The schema's
+`CHECK` constraints reject a restricted row that carries inline content.
+When an approver opens the item, the gateway streams the payload from
+on-prem through the tunnel with `Cache-Control: no-store`; edits are written
+back to on-prem the same way. Fine-tuning preference pairs from restricted
+edits likewise stay on-prem.
 
 Indexes follow the existing `idx_<table>_<purpose>` pattern on
 `(tenant_id, status, created_at DESC)`.

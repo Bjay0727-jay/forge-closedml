@@ -53,8 +53,20 @@ Rules:
 1. **Classification is declared by the uploader and confirmed by a human.** The
    detector can only *raise* a suggestion (e.g. "SSN-like pattern found → phi?"),
    never lower it.
-2. Restricted uploads go **directly to on-prem MinIO** through the tunnel; the
-   gateway streams them and never writes them to R2.
+2. **Files never pass through the gateway's JSON API** (it keeps its 1 MB
+   request cap in `worker/src/index.ts`). Uploading is a three-step flow:
+   `POST /api/knowledge/sources` (metadata only, < 1 MB) → the gateway checks
+   auth, RBAC and classification and returns a **short-lived, single-object
+   presigned upload URL** → the browser uploads directly → `POST
+   /api/knowledge/sources/:id/complete` verifies size and SHA-256 and moves the
+   source to `quarantined`.
+   - `public` / `internal`: presigned **R2** PUT URL into the `quarantine/`
+     prefix (multipart for large files).
+   - `cui` / `phi` / `classified`: presigned **on-prem MinIO** URL on a
+     dedicated tunnel hostname (`upload.<domain>`) protected by Cloudflare
+     Access. Bytes go straight to MinIO and never touch R2 or the Worker.
+   - Default per-file limit 500 MB (tenant-configurable); URLs expire in
+     15 minutes and are bound to the declared size, content type and hash.
 3. Every file has a SHA-256, uploader, source, classification, tenant, and
    retention date. Hash is re-checked before training use.
 4. **Connectors** (later phase): scheduled pulls from SharePoint, Google Drive,

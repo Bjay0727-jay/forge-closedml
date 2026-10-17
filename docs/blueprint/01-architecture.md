@@ -126,18 +126,20 @@ Detail in [`02-data-and-learning.md`](02-data-and-learning.md#2-how-you-give-it-
 
 ```mermaid
 sequenceDiagram
-  participant H as Human (ISSO)
+  participant O as Initiator (operator / assessor)
+  participant H as Assigned approver (ISSO on System X)
   participant GW as Gateway
   participant WF as Workflow (agent run)
   participant T as Tools (on-prem)
-  H->>GW: start "Assess AC family for System X"
+  O->>GW: start "Assess AC family for System X"
+  GW->>GW: pre-flight: an eligible approver other than O exists
   GW->>WF: create run (autonomy cap, budget, scope)
   loop each step
     WF->>T: tool call (retrieve, analyze, draft) — L1–L3 auto
     T-->>WF: result
   end
   WF->>GW: approval_request (e.g. publish 9 findings)
-  GW-->>H: Approvals Inbox notification
+  GW-->>H: Approvals Inbox notification (routed by role + system, never to O)
   H->>GW: approve / edit / reject
   GW->>WF: sendEvent(approval)
   WF-->>GW: completed, artifacts, audit trail

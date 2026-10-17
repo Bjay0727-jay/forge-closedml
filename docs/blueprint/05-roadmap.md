@@ -48,7 +48,7 @@ Scope:
   build), semgrep SAST, `npm audit`/dependency review, `wrangler deploy --dry-run`.
 - zod schemas for request bodies.
 - **D1 → Postgres** ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)):
-  provision managed US-region Postgres (prod + staging), Hyperdrive configs,
+  provision **Neon** Postgres in a US region (`main` branch = prod, `staging` branch = staging), Hyperdrive configs,
   a `Db` interface replacing direct `env.DB.prepare` calls, port
   `0001_initial.sql`, migration runner, data copy from the pilot D1, then
   retire the D1 binding. This also clears the D1 account-cap blocker.
@@ -65,13 +65,14 @@ Scope:
 - `0002_knowledge.sql`: `knowledge_collections`, `knowledge_sources`, `approval_requests`.
 - `DATA_BUCKET` R2 binding (quarantine prefix); `VECTORIZE` binding.
 - On-prem: `embedder`, `qdrant`, `parser`, `minio` services in `docker-compose.yml`; tunnel ingress entries.
-- Gateway: `/api/knowledge/collections`, `/sources` (upload), `/search`, `/answer`; `/api/approvals` (G1 only).
+- Gateway: `/api/knowledge/collections`, `/sources` (metadata) + presigned direct-upload URLs (R2 for public/internal, on-prem MinIO via `upload.<domain>` tunnel host for restricted) + `/sources/:id/complete`, `/search`, `/answer`; `/api/approvals` (G1 only). The existing 1 MB gateway cap stays — file bytes never go through the Worker ([`02` §2](02-data-and-learning.md#2-how-you-give-it-data)).
 - `ObjectStore` / `VectorStore` interfaces with Cloudflare + on-prem implementations.
 - Dashboard: Knowledge page, upload wizard with classification, Approvals Inbox (G1).
 - Seed collection: NIST 800-53 Rev 5 OSCAL catalog + 800-53A.
 
 Acceptance:
-- Upload a PDF as `internal` → G1 approve → searchable in < 5 min, answers cite pages.
+- Upload a 50 MB PDF as `internal` → G1 approve → searchable in < 5 min, answers cite pages.
+- A request to the JSON API over 1 MB is still rejected with 413.
 - Upload as `cui` → bytes never appear in R2 (verified by listing), vectors in Qdrant only.
 - Tenant A cannot retrieve tenant B chunks (automated test).
 - Uploader cannot approve their own G1 request.
@@ -140,7 +141,7 @@ GPU host, enforced by a per-endpoint `allowed_classifications` setting.
 | Need | Cloudflare (default) | Alternative if needed |
 |---|---|---|
 | API / gateway | Workers | — |
-| Metadata | **Postgres via Hyperdrive** (managed, US region, e.g. Neon or AWS RDS) — decided, replaces D1 | Postgres on-prem (air-gap) |
+| Metadata | **Neon Postgres via Hyperdrive** (US region) — decided, replaces D1 | Postgres on-prem (air-gap) |
 | Objects | R2 | — |
 | Vectors (non-restricted) | Vectorize | Qdrant everywhere |
 | Orchestration | Workflows + Durable Objects | Temporal on-prem (air-gap) |
@@ -156,8 +157,7 @@ GPU host, enforced by a per-endpoint `allowed_classifications` setting.
 | 2 | Default autonomy cap | **L2 (Copilot)** for new tenants. |
 | 3 | Retention | Best-practice defaults in [`02` §6](02-data-and-learning.md#6-retention-decided-best-practice-defaults). |
 | 4 | Pilot GPU | Single 48 GB box on Hetzner (GEX130), public/internal/synthetic data only ([ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md)). |
-| 5 | Metadata DB | Move from D1 to managed US-region Postgres via Hyperdrive in Phase 0.5 ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)); resolves the D1 account cap. |
+| 5 | Metadata DB | Move from D1 to **Neon** Postgres (US region) via Hyperdrive in Phase 0.5 ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)); resolves the D1 account cap. |
 
 ### Still open
-- Pick the managed Postgres provider (Neon vs AWS RDS) at Phase 0.5 planning.
 - Confirm current Hetzner GEX130 price/availability before ordering.
