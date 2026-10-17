@@ -19,6 +19,24 @@ forge-closedml/
 
 ---
 
+## Platform blueprint (Phases 3–4, proposed)
+
+The design for extending ForgeClosedML into a Generative / Analytical /
+Predictive / Agentic AI platform (CanaPoint RMF first, hybrid or air-gapped)
+lives in [`docs/blueprint/`](docs/blueprint/00-overview.md), with decisions
+recorded in [`docs/adr/`](docs/adr/README.md).
+
+| Doc | Contents |
+| --- | --- |
+| [00 Overview](docs/blueprint/00-overview.md) | Engines, autonomy levels, human gates G0–G5 |
+| [01 Architecture](docs/blueprint/01-architecture.md) | Components, data flows, hybrid vs air-gap |
+| [02 Data and learning](docs/blueprint/02-data-and-learning.md) | Data intake, RAG, fine-tuning, predictive training |
+| [03 Agents and governance](docs/blueprint/03-agents-and-governance.md) | Agent catalog, approvals, proposed schema |
+| [04 Security and compliance](docs/blueprint/04-security-and-compliance.md) | Threat model, OWASP LLM Top 10, NIST mappings |
+| [05 Roadmap](docs/blueprint/05-roadmap.md) | Phases, acceptance criteria, hardware sizing |
+
+---
+
 ## Architecture summary
 
 ```
