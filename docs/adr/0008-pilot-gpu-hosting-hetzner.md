@@ -1,6 +1,6 @@
 # ADR-0008: Pilot GPU host on Hetzner, restricted to non-sensitive data
 
-- Status: Proposed (decision confirmed by reviewer 2026-10-17)
+- Status: **Superseded in part by [ADR-0009](0009-workers-ai-for-non-restricted.md)** (2026-10-19): pilot inference moves to Workers AI; the Hetzner box is used only for Phase 4b training, rented around training runs. The data restrictions below still apply.
 - Date: 2026-10-17
 
 ## Context
