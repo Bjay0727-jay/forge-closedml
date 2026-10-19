@@ -20,3 +20,9 @@ switching is a LiteLLM `model_list` change.
 - + No gateway code change.
 - − Two serving runtimes to patch; vLLM needs a CUDA GPU (no CPU fallback).
 - Fine-tuned outputs are produced in safetensors (vLLM) and GGUF (Ollama).
+
+## Addendum (2026-10-19)
+A third backend, **Cloudflare Workers AI**, serves `public` / `internal`
+requests that use catalog models ([ADR-0009](0009-workers-ai-for-non-restricted.md)).
+vLLM / Ollama remain the backends for restricted data, air-gap tenants and
+Forge fine-tuned models.

@@ -29,6 +29,7 @@ flowchart TB
     R2[(R2<br/>uploads quarantine, datasets,<br/>artifacts, evidence bundles)]
     KV[(KV<br/>rate limit, cache)]
     VEC[(Vectorize<br/>public + internal only)]
+    WAI[Workers AI<br/>generation, embeddings, rerank<br/>public + internal only]
   end
 
   subgraph OP[On-prem — data plane]
@@ -48,8 +49,9 @@ flowchart TB
   U --> ACC --> DASH --> GW
   P -->|service token| GW
   GW --> PG & KV & R2 & VEC
+  GW -->|public / internal| WAI
   GW --> WF --> Q
-  GW ==>|Tunnel| CFD
+  GW ==>|Tunnel: restricted + own models| CFD
   CFD --> LLM --> VLLM
   CFD --> EMB & PARSE & RULES & SCORE & MLF
   EMB --> QD
@@ -152,16 +154,24 @@ sequenceDiagram
 ## 4. Classification-driven routing
 
 The existing `classification_policies.allowed_destinations` drives **where data
-and vectors may live**. We add one destination value, `vectorize`, and keep
+and vectors may live**. We add two destination values, `vectorize` and `workers-ai`, and keep
 the rest:
 
 | Classification | Raw files | Vectors | Inference | Edge caching |
 |---|---|---|---|---|
-| `public` | R2 | Vectorize | on-prem (cloud allowed by policy) | allowed |
-| `internal` | R2 | Vectorize | on-prem | allowed, short TTL |
-| `cui` | MinIO (on-prem) | Qdrant | on-prem only | **never** |
+| `public` | R2 | Vectorize | **Workers AI** (default) or own GPU | allowed |
+| `internal` | R2 | Vectorize | **Workers AI** (default) or own GPU | allowed, short TTL |
+| `cui` | MinIO (on-prem) | Qdrant | own GPU on-prem / GovCloud only — never Workers AI | **never** |
 | `phi` | MinIO, tokenized | Qdrant | on-prem only, `X-PHI-Tokenized` | **never** |
 | `classified` | MinIO (enclave) | Qdrant | on-prem only | **never** |
+
+**Which inference backend is used** ([ADR-0009](../adr/0009-workers-ai-for-non-restricted.md)):
+the gateway checks `enforceClassification(env, classification, 'workers-ai')`.
+If the policy allows it (seeded for `public` and `internal` only), the call
+goes to the `AI` binding; otherwise it goes through the tunnel to LiteLLM on
+an own-GPU endpoint whose `allowed_classifications` include the request's
+class. If neither is available the request is refused. Requests that name a
+Forge fine-tuned model always go to the own-GPU path.
 
 **Where the data plane runs also limits classification.** Each registered
 endpoint gets an `allowed_classifications` list (new column on `endpoints`).
@@ -172,8 +182,8 @@ host, and the gateway refuses the request if no such endpoint exists.
 
 `enforceClassification(env, classification, destination)` in
 `worker/src/middleware/classify.ts` is reused unchanged — callers just pass the
-new destination (`'vectorize'`, `'r2'`, `'on-prem'`). `AllowedDestination` in
-`worker/src/types.ts` gains `'vectorize'`.
+new destination (`'vectorize'`, `'workers-ai'`, `'r2'`, `'on-prem'`). `AllowedDestination` in
+`worker/src/types.ts` gains `'vectorize'` and `'workers-ai'`.
 
 ## 5. Deployment modes
 
@@ -198,7 +208,7 @@ with a Cloudflare implementation and a local implementation. No handler calls
 | Metric | Target |
 |---|---|
 | RAG answer p95 (8B model, top-8 chunks) | < 6 s |
-| Evidence-review throughput | ≥ 500 artifacts/hour on one 48 GB GPU |
+| Evidence-review throughput | ≥ 500 artifacts/hour on one 96 GB GPU (pilot box) |
 | Ingestion | ≥ 1,000 pages/hour |
 | Availability (control plane) | 99.9% (Cloudflare SLA) |
 | Availability (data plane) | 99.5% single host; HA is a later phase |

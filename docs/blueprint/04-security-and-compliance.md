@@ -10,6 +10,7 @@
 | B2 | Edge → Gateway logic | Every request | `authenticate` + RBAC + classification + audit (existing) |
 | B3 | Gateway → on-prem | Inference, tool calls, restricted uploads | Outbound-only Tunnel, CF Access service token on every origin, mTLS (Phase 4c) |
 | B3a | Gateway → hosted pilot GPU (Hetzner, EU) | Inference and training on `public` / `internal` / synthetic data only | Same as B3, plus per-endpoint `allowed_classifications`; host firewall denies all inbound; full-disk encryption |
+| B8 | Gateway → Workers AI | Generation, embeddings, rerank for `public` / `internal` only | `enforceClassification(..., 'workers-ai')` before every call; never for restricted data or air-gap tenants; no prompt/output persistence on our side for restricted classes ([ADR-0009](../adr/0009-workers-ai-for-non-restricted.md)) |
 | B7 | Workers → managed Postgres (US) | Metadata, audit, approvals | Hyperdrive over TLS, least-privilege DB roles per environment, provider encryption at rest, no restricted content stored |
 | B4 | Tenant ↔ tenant | Retrieval, runs, datasets | Mandatory `tenant_id` + collection ACL filter in gateway; per-tenant Qdrant collections |
 | B5 | Untrusted content → model | Uploaded evidence, scan output | Treated as data, never as instructions (see LLM01) |
@@ -20,7 +21,7 @@
 | Risk | Platform mitigation |
 |---|---|
 | **LLM01 Prompt injection** (direct + indirect via evidence) | Retrieved/uploaded text is wrapped in delimited, labeled data blocks; system prompt forbids following instructions from data; tool calls validated against schema and tier; injection classifier on ingestion flags suspicious docs for G1 reviewer; agents cannot call T5; red-team suite includes indirect-injection corpus |
-| **LLM02 Sensitive information disclosure** | Classification routing (01 §4); restricted content never stored at edge; PHI tokenization (existing `X-PHI-Tokenized`); output scanner for PII/secret patterns before response |
+| **LLM02 Sensitive information disclosure** | Classification routing (01 §4), including Workers AI only for public/internal; restricted content never stored at edge; PHI tokenization (existing `X-PHI-Tokenized`); output scanner for PII/secret patterns before response |
 | **LLM03 Supply chain** | Only license-reviewed open-weight models; SHA-256 + signature verified on load (`model_versions.sha256_hash`, `artifact_signature`); pinned container digests; SBOM per release (Syft) + vulnerability scan (Grype) |
 | **LLM04 Data and model poisoning** | G1 human approval on every source; hash re-check at training time; dataset lineage; eval regression gates at G3 |
 | **LLM05 Improper output handling** | Outputs rendered as text/Markdown only, sanitized; never executed; structured outputs validated with JSON schema |
