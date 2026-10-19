@@ -198,7 +198,7 @@ with a Cloudflare implementation and a local implementation. No handler calls
 | Metric | Target |
 |---|---|
 | RAG answer p95 (8B model, top-8 chunks) | < 6 s |
-| Evidence-review throughput | ≥ 500 artifacts/hour on one 48 GB GPU |
+| Evidence-review throughput | ≥ 500 artifacts/hour on one 96 GB GPU (pilot box) |
 | Ingestion | ≥ 1,000 pages/hour |
 | Availability (control plane) | 99.9% (Cloudflare SLA) |
 | Availability (data plane) | 99.5% single host; HA is a later phase |

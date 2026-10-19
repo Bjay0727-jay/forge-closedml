@@ -108,8 +108,11 @@ flowchart LR
 ```
 
 - **Base models:** open-weight, license-reviewed (Llama 3.1 8B today per
-  `config/Modelfile.forge-compliance`; candidate upgrades: Llama 3.x 70B,
-  Qwen 2.5 32B, Mistral Small). Base model choice is an ADR per upgrade.
+  `config/Modelfile.forge-compliance`). Required model classes for the pilot
+  (reviewer, 2026-10-19): **70B-class LLMs** (e.g. Llama 3.x 70B, Qwen 72B),
+  **vision / document models**, **security-specific models**, and **Forge
+  fine-tuned models**. Each specific model is license-reviewed and recorded
+  in the model registry before use; base model choice is an ADR per upgrade.
 - **Training data sources:** approved narratives, assessor-edited drafts
   (original → edited pairs become preference data for DPO), curated Q&A.
 - **Eval harness (blocks promotion):**

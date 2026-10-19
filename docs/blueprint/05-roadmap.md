@@ -120,17 +120,18 @@ Acceptance: fresh, network-isolated host installs from bundle and passes the exi
 
 | Tier | Use | Suggested spec |
 |---|---|---|
-| **Pilot** | 8B models serving + embeddings + QLoRA on 8B | 1× 48 GB GPU (L40S / RTX 6000 Ada), 32 vCPU, 256 GB RAM, 4 TB NVMe |
+| **Pilot** | 70B (4-bit) + vision + security models + embeddings; QLoRA up to 70B | 1× 96 GB GPU (RTX PRO 6000 Blackwell), Hetzner GEX131 |
 | **Production** | 70B (4-bit) serving or several 8–32B models; QLoRA on 32B | 2–4× 80 GB (H100/H200 or A100), 64 vCPU, 512 GB RAM, 8 TB NVMe |
 | **Air-gap customer** | Same as pilot or production, plus a transfer workstation | per customer |
 
 Training can share the serving host in pilot (scheduled off-hours); split to a
 dedicated trainer node at production.
 
-**Decided: pilot box = Hetzner GEX130** (1× RTX 6000 Ada 48 GB, Xeon Gold
-5412U, 128 GB RAM — upgrade RAM if available) — see
-[ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md). Hetzner GEX131 (96 GB
-Blackwell) is the step-up option. Constraint: Hetzner GPU servers are in
+**Decided: pilot box = Hetzner GEX131** (1× RTX PRO 6000 Blackwell 96 GB;
+upgrade RAM if offered) — see [ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md).
+Sized for the required model classes: 70B-class LLMs, vision/document models,
+security-specific models and Forge fine-tuned models. GEX130 (48 GB) was
+rejected as too small. Constraint: Hetzner GPU servers are in
 Germany / Finland with no FedRAMP authorization or HIPAA BAA, so the pilot
 host is limited to **`public` / `internal` / synthetic data**. CUI, PHI and
 classified workloads run only on customer premises or a US FedRAMP / GovCloud
@@ -156,8 +157,8 @@ GPU host, enforced by a per-endpoint `allowed_classifications` setting.
 | 1 | Roles | Data steward split into `data-steward` / `data-steward-restricted`; RMF authority split into NIST 800-37 `rmf-isso`, `rmf-sca`, `rmf-ao`. IdP group = eligibility, per-system assignment = authority. Groups tenant-prefixed (`<tenant>-…`). See [`03` §5](03-agents-and-governance.md#5-roles-extends-workersrcmiddlewarerbacts). |
 | 2 | Default autonomy cap | **L2 (Copilot)** for new tenants. |
 | 3 | Retention | Best-practice defaults in [`02` §6](02-data-and-learning.md#6-retention-decided-best-practice-defaults). |
-| 4 | Pilot GPU | Single 48 GB box on Hetzner (GEX130), public/internal/synthetic data only ([ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md)). |
+| 4 | Pilot GPU | Single **96 GB** box on Hetzner (**GEX131**), public/internal/synthetic data only ([ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md)). All inference on own GPU — Cloudflare Workers AI considered and rejected 2026-10-19 because its catalog lacks the required models. |
 | 5 | Metadata DB | Move from D1 to **Neon** Postgres (US region) via Hyperdrive in Phase 0.5 ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)); resolves the D1 account cap. |
 
 ### Still open
-- Confirm current Hetzner GEX130 price/availability before ordering.
+- Confirm current Hetzner GEX131 price/availability before ordering.
