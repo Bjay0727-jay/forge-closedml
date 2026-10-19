@@ -1,6 +1,6 @@
 # ADR-0008: Pilot GPU host on Hetzner, restricted to non-sensitive data
 
-- Status: Proposed (decision confirmed by reviewer 2026-10-17; GPU size revised to GEX131 on 2026-10-19)
+- Status: **Superseded in part by [ADR-0009](0009-workers-ai-for-non-restricted.md)** (2026-10-19): the cost-sensitive pilot runs on Cloudflare Workers AI. The GEX131 below is ordered only when the pilot needs what Workers AI cannot provide (security-specialist models, full fine-tuning, models outside its catalog). GPU size revised from GEX130 to GEX131 on 2026-10-19. The data restrictions below still apply.
 - Date: 2026-10-17
 
 ## Context

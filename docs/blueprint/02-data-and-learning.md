@@ -83,7 +83,7 @@ Rules:
 | Parsing | Docling (layout-aware PDF/DOCX), Tesseract OCR for images, native parsers for OSCAL, Nessus, XCCDF |
 | Chunking | Structure-aware: one chunk per OSCAL control/part; headings-based for documents (~500–800 tokens, 15% overlap) |
 | Metadata on every chunk | `tenant_id`, `collection_id`, `source_id`, `classification`, `control_ids[]`, `system_id`, `page`, `valid_until` |
-| Embeddings | On-prem `bge-m3` (multilingual, 8k context) via LiteLLM `/v1/embeddings` |
+| Embeddings | `public` / `internal`: Workers AI `bge` embedding model → Vectorize (no on-prem service needed). Restricted: on-prem `bge-m3` via LiteLLM `/v1/embeddings` → Qdrant. A collection never mixes the two, since vectors from different models are not comparable. |
 | Retrieval | Hybrid: vector + BM25 keyword (Qdrant sparse vectors) → cross-encoder rerank → top-k |
 | Isolation | Mandatory filter `tenant_id = caller.tenant AND collection_id IN caller.allowed_collections`; enforced in the gateway, not the prompt |
 | Citations | Every generated claim must map to a returned `source_id`; uncited claims are flagged in the UI |

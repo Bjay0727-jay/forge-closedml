@@ -64,7 +64,8 @@ README smoke tests pass against Postgres; audit row counts match D1 after copy.
 Scope:
 - `0002_knowledge.sql`: `knowledge_collections`, `knowledge_sources`, `approval_requests`.
 - `DATA_BUCKET` R2 binding (quarantine prefix); `VECTORIZE` binding.
-- On-prem: `embedder`, `qdrant`, `parser`, `minio` services in `docker-compose.yml`; tunnel ingress entries.
+- `AI` (Workers AI) binding for public/internal generation + embeddings. **A public/internal MVP runs entirely on Cloudflare — no GPU server needed.**
+- On-prem (restricted path only): `embedder`, `qdrant`, `parser`, `minio` services in `docker-compose.yml`; tunnel ingress entries. Built and tested in 3a; deployed when the first restricted-data customer host exists.
 - Gateway: `/api/knowledge/collections`, `/sources` (metadata) + presigned direct-upload URLs (R2 for public/internal, on-prem MinIO via `upload.<domain>` tunnel host for restricted) + `/sources/:id/complete`, `/search`, `/answer`; `/api/approvals` (G1 only). The existing 1 MB gateway cap stays — file bytes never go through the Worker ([`02` §2](02-data-and-learning.md#2-how-you-give-it-data)).
 - `ObjectStore` / `VectorStore` interfaces with Cloudflare + on-prem implementations.
 - Dashboard: Knowledge page, upload wizard with classification, Approvals Inbox (G1).
@@ -124,14 +125,20 @@ Acceptance: fresh, network-isolated host installs from bundle and passes the exi
 | **Production** | 70B (4-bit) serving or several 8–32B models; QLoRA on 32B | 2–4× 80 GB (H100/H200 or A100), 64 vCPU, 512 GB RAM, 8 TB NVMe |
 | **Air-gap customer** | Same as pilot or production, plus a transfer workstation | per customer |
 
-Training can share the serving host in pilot (scheduled off-hours); split to a
-dedicated trainer node at production.
+Training can share the serving host when one exists; split to a dedicated
+trainer node at production.
 
-**Decided: pilot box = Hetzner GEX131** (1× RTX PRO 6000 Blackwell 96 GB;
-upgrade RAM if offered) — see [ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md).
-Sized for the required model classes: 70B-class LLMs, vision/document models,
-security-specific models and Forge fine-tuned models. GEX130 (48 GB) was
-rejected as too small. Constraint: Hetzner GPU servers are in
+**Decided (2026-10-19): the pilot runs on Cloudflare Workers AI** for
+`public` / `internal` data ([ADR-0009](../adr/0009-workers-ai-for-non-restricted.md)),
+because it is the cheapest option (pay per use, no idle GPU). Its catalog
+covers a 70B LLM, a vision model, a guard/safety model, embeddings and
+rerankers. No GPU server is needed for Phases 3a–3d.
+
+**Own GPU, when needed = Hetzner GEX131** (1× RTX PRO 6000 Blackwell 96 GB) —
+see [ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md). Ordered only when the
+pilot needs security-specialist models, full fine-tuning (Phase 4b), or other
+models outside the Workers AI catalog; GEX130 (48 GB) was rejected as too small
+for 70B + vision. Constraint: Hetzner GPU servers are in
 Germany / Finland with no FedRAMP authorization or HIPAA BAA, so the pilot
 host is limited to **`public` / `internal` / synthetic data**. CUI, PHI and
 classified workloads run only on customer premises or a US FedRAMP / GovCloud
@@ -148,7 +155,7 @@ GPU host, enforced by a per-endpoint `allowed_classifications` setting.
 | Orchestration | Workflows + Durable Objects | Temporal on-prem (air-gap) |
 | Queues | Queues | — |
 | Identity | Access | Keycloak (air-gap) |
-| Inference | **on-prem** (Workers AI only for `public` demos, opt-in) | — |
+| Inference | **Workers AI** for `public` / `internal`; own GPU (on-prem / GovCloud) for restricted and Forge fine-tuned models | Own GPU everywhere (air-gap) |
 
 ## Reviewer decisions (recorded 2026-10-17)
 
@@ -157,7 +164,7 @@ GPU host, enforced by a per-endpoint `allowed_classifications` setting.
 | 1 | Roles | Data steward split into `data-steward` / `data-steward-restricted`; RMF authority split into NIST 800-37 `rmf-isso`, `rmf-sca`, `rmf-ao`. IdP group = eligibility, per-system assignment = authority. Groups tenant-prefixed (`<tenant>-…`). See [`03` §5](03-agents-and-governance.md#5-roles-extends-workersrcmiddlewarerbacts). |
 | 2 | Default autonomy cap | **L2 (Copilot)** for new tenants. |
 | 3 | Retention | Best-practice defaults in [`02` §6](02-data-and-learning.md#6-retention-decided-best-practice-defaults). |
-| 4 | Pilot GPU | Single **96 GB** box on Hetzner (**GEX131**), public/internal/synthetic data only ([ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md)). All inference on own GPU — Cloudflare Workers AI considered and rejected 2026-10-19 because its catalog lacks the required models. |
+| 4 | Pilot GPU | **Pilot on Cloudflare Workers AI** (public/internal, cheapest). **Hetzner GEX131 (96 GB)** ordered only when security-specialist models, full fine-tuning or other non-catalog models are needed ([ADR-0009](../adr/0009-workers-ai-for-non-restricted.md), [ADR-0008](../adr/0008-pilot-gpu-hosting-hetzner.md); revised 2026-10-19). |
 | 5 | Metadata DB | Move from D1 to **Neon** Postgres (US region) via Hyperdrive in Phase 0.5 ([ADR-0007](../adr/0007-postgres-via-hyperdrive.md)); resolves the D1 account cap. |
 
 ### Still open
